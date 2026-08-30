@@ -1,0 +1,13 @@
+[package]
+name = "memtable"
+edition = "2024"
+version.workspace = true
+
+[dependencies]
+common = { path = "../common" }
+rand.workspace = true
+tokio.workspace = true
+wal = { path = "../wal" }
+
+[dev-dependencies]
+tempfile.workspace = true

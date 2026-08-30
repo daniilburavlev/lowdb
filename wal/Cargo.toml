@@ -1,0 +1,11 @@
+[package]
+name = "wal"
+edition = "2024"
+version.workspace = true
+
+[dependencies]
+common = { path = "../common" }
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

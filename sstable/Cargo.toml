@@ -1,0 +1,12 @@
+[package]
+name = "sstable"
+edition = "2024"
+version.workspace = true
+
+[dependencies]
+crc32fast.workspace = true
+common = { path = "../common" }
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

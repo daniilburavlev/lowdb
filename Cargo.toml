@@ -1,0 +1,13 @@
+[workspace.package]
+version = "0.0.1"
+
+[workspace]
+resolver = "2"
+members = ["collection", "common", "memtable", "sstable", "wal"]
+
+[workspace.dependencies]
+crc32fast = "1.5"
+rand = "0.10"
+tokio = { version = "1.53", features = ["full"] }
+thiserror = "2.0"
+tempfile = "3.27"

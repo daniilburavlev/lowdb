@@ -1,0 +1,9 @@
+[package]
+name = "collection"
+edition = "2024"
+version.workspace = true
+
+[dependencies]
+common = { path = "../common" }
+sstable = { path = "../sstable" }
+tokio.workspace = true
