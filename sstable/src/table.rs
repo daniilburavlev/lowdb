@@ -14,18 +14,36 @@ pub enum Lookup {
     Absent,
 }
 
+impl Lookup {
+    pub fn to_opt(self) -> Option<String> {
+        match self {
+            Self::Found(value) => Some(value),
+            _ => None,
+        }
+    }
+}
+
 pub struct BlockHandle {
     pub last_key: Key,
     pub offset: u64,
     pub len: u32,
 }
 
+#[derive(Debug)]
 pub struct SSTable {
     file: Arc<File>,
     pub meta: SSTableMeta,
 }
 
 impl SSTable {
+    pub fn new(meta: SSTableMeta) -> DbResult<Self> {
+        let file = File::open(&meta.path)?;
+        Ok(Self {
+            file: Arc::new(file),
+            meta,
+        })
+    }
+
     pub async fn open(path: impl Into<PathBuf>) -> DbResult<Self> {
         let path = path.into();
         let meta = SSTableMeta::read(&path).await?;

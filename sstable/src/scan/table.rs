@@ -7,7 +7,6 @@ use tokio::{
 };
 
 use crate::{
-    encode,
     footer::{FOOTER_LEN, Footer},
     read::ReadFrom,
 };
@@ -43,7 +42,7 @@ impl TableScan {
         let key = Key::read(&mut self.r).await?;
         let mut used = key.disk_size();
 
-        let value = encode::read_value(&mut self.r).await?;
+        let value = Value::read(&mut self.r).await?;
         used += value.disk_size();
 
         self.block_remaining -= used as u16;

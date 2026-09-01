@@ -1,4 +1,7 @@
-use std::{array::TryFromSliceError, num::TryFromIntError};
+use std::{
+    array::TryFromSliceError,
+    num::{ParseIntError, TryFromIntError},
+};
 
 use thiserror::Error;
 
@@ -30,6 +33,12 @@ impl From<TryFromIntError> for DbError {
 
 impl From<TryFromSliceError> for DbError {
     fn from(err: TryFromSliceError) -> Self {
+        Self::InvalidValue(err.to_string())
+    }
+}
+
+impl From<ParseIntError> for DbError {
+    fn from(err: ParseIntError) -> Self {
         Self::InvalidValue(err.to_string())
     }
 }

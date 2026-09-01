@@ -130,7 +130,7 @@ impl SSTableWriter {
         Ok(())
     }
 
-    pub(crate) async fn finish(mut self) -> DbResult<Option<SSTableMeta>> {
+    pub async fn finish(mut self) -> DbResult<Option<SSTableMeta>> {
         if self.entries == 0 {
             drop(self.file);
             let _ = fs::remove_file(&self.tmp).await;
@@ -195,7 +195,7 @@ mod tests {
     use tempfile::NamedTempFile;
     use tokio::io::{AsyncReadExt, AsyncSeekExt, BufReader};
 
-    use crate::{encode::read_value, read::ReadFrom};
+    use crate::read::ReadFrom;
 
     use super::*;
 
@@ -227,7 +227,7 @@ mod tests {
         while len > 0 {
             let key = Key::read(&mut r).await.unwrap();
             assert_eq!(key.0, format!("{}", i));
-            let value = read_value(&mut r).await.unwrap();
+            let value = Value::read(&mut r).await.unwrap();
             len -= key.disk_size() as u16;
             len -= value.disk_size() as u16;
             i += 1;
