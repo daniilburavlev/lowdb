@@ -35,6 +35,7 @@ impl WalWriter {
 
         match value {
             Value::Set(value) => {
+                let len: u16 = value.len().try_into()?;
                 writer.write_u16(len).await?;
                 writer.write_all(value.as_bytes()).await?;
             }
@@ -113,7 +114,23 @@ mod tests {
         let writer = WalWriter::open(file.path()).await.unwrap();
 
         let key = Key::new("key", 1);
-        let value = Value::Delete;
+        let value = Value::set("value");
+        writer.append(&key, &value).await.unwrap();
+        drop(writer);
+
+        let mut reader = WalReader::open(file.path()).await.unwrap();
+        let result = reader.next().await.unwrap().unwrap();
+
+        assert_eq!((key, value), result);
+    }
+
+    #[tokio::test]
+    async fn wal_key_value() {
+        let file = NamedTempFile::new().unwrap();
+        let writer = WalWriter::open(file.path()).await.unwrap();
+
+        let key = Key::new("long_enough_key", 1);
+        let value = Value::set("short");
         writer.append(&key, &value).await.unwrap();
         drop(writer);
 
@@ -129,7 +146,7 @@ mod tests {
         let writer = WalWriter::open(file.path()).await.unwrap();
 
         let key = Key("k".repeat((u16::MAX as usize) + 5), 1);
-        let value = Value::Delete;
+        let value = Value::set("value");
 
         assert!(
             matches!(

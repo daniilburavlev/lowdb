@@ -4,7 +4,7 @@ use std::{
 };
 
 use chrono::Utc;
-use common::{DbResult, key::Key, value::Value};
+use common::{DbResult, key::Key, lookup::Lookup, value::Value};
 use memtable::MemTable;
 use tokio::sync::{Mutex, MutexGuard, RwLock};
 
@@ -58,15 +58,22 @@ impl Collection {
 
     pub async fn get(&self, key: &str) -> DbResult<Option<String>> {
         let snapshot = self.state.read().await.clone();
-        if let Some(v) = snapshot.mem_table.get(key) {
-            return Ok(Some(v));
+        match snapshot.mem_table.get(key) {
+            Lookup::Found(value) => return Ok(Some(value)),
+            Lookup::Deleted => return Ok(None),
+            _ => {}
         }
         for mt in &snapshot.frozen {
-            if let Some(v) = mt.get(key) {
-                return Ok(Some(v));
+            match mt.get(key) {
+                Lookup::Found(value) => return Ok(Some(value)),
+                Lookup::Deleted => return Ok(None),
+                _ => {}
             }
         }
-        snapshot.storage.get(key).await
+        match snapshot.storage.get(key).await? {
+            Lookup::Found(value) => Ok(Some(value)),
+            _ => Ok(None),
+        }
     }
 
     async fn try_freeze(&self) -> DbResult<()> {

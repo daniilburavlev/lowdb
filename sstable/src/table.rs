@@ -1,27 +1,12 @@
 use std::{fs::File, path::PathBuf, sync::Arc};
 
-use common::{DbResult, error::DbError, key::Key};
+use common::{DbResult, error::DbError, key::Key, lookup::Lookup};
 
 use crate::{
     cursor::{Cursor, ValueRef},
     index::IndexedKey,
     meta::SSTableMeta,
 };
-
-pub enum Lookup {
-    Found(String),
-    Deleted,
-    Absent,
-}
-
-impl Lookup {
-    pub fn to_opt(self) -> Option<String> {
-        match self {
-            Self::Found(value) => Some(value),
-            _ => None,
-        }
-    }
-}
 
 pub struct BlockHandle {
     pub last_key: Key,

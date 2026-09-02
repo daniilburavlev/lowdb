@@ -3,7 +3,7 @@ use std::{
     sync::{Arc, atomic::AtomicU64},
 };
 
-use common::DbResult;
+use common::{DbResult, lookup::Lookup};
 use dashmap::DashMap;
 use memtable::MemTable;
 use sstable::{meta::SSTableMeta, table::SSTable, writer::SSTableWriter};
@@ -16,7 +16,7 @@ const TABLES_DIR: &str = "ss";
 
 pub(crate) struct Storage {
     id: AtomicU64,
-    tables: DashMap<String, Vec<SSTable>>,
+    tables: DashMap<u32, Vec<SSTable>>,
     lock: Mutex<()>,
 }
 
@@ -33,7 +33,7 @@ impl Storage {
             let filename = filename.to_string_lossy();
             let (level, curr_id) = get_level(&filename)?;
 
-            let mut tables = metas.entry(level.to_string()).or_insert(vec![]);
+            let mut tables = metas.entry(level).or_insert(vec![]);
             let meta = SSTableMeta::read(entry.path()).await?;
             let table = SSTable::new(meta)?;
 
@@ -49,7 +49,7 @@ impl Storage {
 
     pub(crate) async fn l0(&self, mt: Arc<MemTable>) -> DbResult<()> {
         let path = format!(
-            "l0_{}",
+            "0_{}",
             self.id.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         );
         let mut writer = SSTableWriter::create(&path).await?;
@@ -58,31 +58,30 @@ impl Storage {
         }
         if let Some(meta) = writer.finish().await? {
             let table = SSTable::new(meta)?;
-            self.tables
-                .entry("l0".to_string())
-                .or_insert(vec![])
-                .push(table);
+            self.tables.entry(0).or_insert(vec![]).push(table);
         }
         Ok(())
     }
 
-    pub(crate) async fn get(&self, key: &str) -> DbResult<Option<String>> {
+    pub(crate) async fn get(&self, key: &str) -> DbResult<Lookup> {
         for entry in self.tables.iter() {
             let tables = entry.value();
             for table in tables {
-                if let Some(value) = table.get(key, 0).await?.to_opt() {
-                    return Ok(Some(value));
+                match table.get(key, u64::MAX).await? {
+                    Lookup::Absent => {}
+                    lookup => return Ok(lookup),
                 }
             }
         }
-        Ok(None)
+        Ok(Lookup::Absent)
     }
 }
 
-fn get_level(filename: &str) -> DbResult<(&str, u64)> {
+fn get_level(filename: &str) -> DbResult<(u32, u64)> {
     let elements: Vec<&str> = filename.split('_').collect();
+    let level: u32 = elements[0].parse()?;
     let id: u64 = elements[1].parse()?;
-    Ok((elements[0], id))
+    Ok((level, id))
 }
 
 #[cfg(test)]
@@ -100,7 +99,7 @@ mod tests {
         let mut count = 0;
         for i in 0..3 {
             for _ in 0..10 {
-                let path = path.join(format!("l{}_{}", i, count));
+                let path = path.join(format!("{}_{}", i, count));
                 let mut writer = SSTableWriter::create(&path).await.unwrap();
                 writer
                     .add(&Key::new("key", 1), &Value::Delete)

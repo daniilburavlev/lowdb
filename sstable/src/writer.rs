@@ -79,9 +79,6 @@ impl SSTableWriter {
         if new_key {
             self.hashes.push(BloomFilter::hash64(&key.0));
         }
-        if self.first_key.is_none() {
-            self.first_key = Some(key.clone());
-        }
         encode(&mut self.block, key, value)?;
         if self.first_key.is_none() {
             self.first_key = Some(key.clone());
@@ -145,7 +142,7 @@ impl SSTableWriter {
 
         let index_off = self.offset;
         self.file.write_all(&self.index_bytes).await?;
-        self.offset += self.index.len() as u64;
+        self.offset += IndexedKey::list_disk_size(&self.index) as u64;
 
         let mut index_len = 0u32;
         for i in &self.index {

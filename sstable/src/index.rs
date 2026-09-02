@@ -26,6 +26,14 @@ impl IndexedKey {
     pub(crate) fn disk_size(&self) -> usize {
         self.key.disk_size() + 8 + 2
     }
+
+    pub(crate) fn list_disk_size(indexes: &[Self]) -> usize {
+        let mut size = 0;
+        for index in indexes {
+            size += index.disk_size();
+        }
+        size
+    }
 }
 
 impl WriteToBuf for IndexedKey {

@@ -1,6 +1,6 @@
 use std::sync::atomic::AtomicUsize;
 
-use common::{key::Key, value::Value};
+use common::{key::Key, lookup::Lookup, value::Value};
 
 use crate::list::SkipList;
 
@@ -33,10 +33,11 @@ impl MemTable {
             .fetch_add(size, std::sync::atomic::Ordering::Relaxed);
     }
 
-    pub fn get(&self, key: &str) -> Option<String> {
+    pub fn get(&self, key: &str) -> Lookup {
         match self.skip_list.get(key).cloned() {
-            Some(Value::Set(v)) => Some(v),
-            _ => None,
+            Some(Value::Set(value)) => Lookup::Found(value),
+            Some(Value::Delete) => Lookup::Deleted,
+            None => Lookup::Absent,
         }
     }
 
@@ -72,7 +73,9 @@ mod tests {
         for i in 0..100 {
             let key = format!("{}", i);
             let expected = format!("{}", i * 2);
-            let value = mem_table.get(&key).unwrap();
+            let Lookup::Found(value) = mem_table.get(&key) else {
+                panic!("value not found");
+            };
             assert_eq!(expected, value);
         }
     }
