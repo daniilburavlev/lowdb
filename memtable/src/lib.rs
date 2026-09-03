@@ -11,15 +11,21 @@ pub use list::Iter;
 const MAX_SIZE: usize = 1024 * 1024;
 
 pub struct MemTable {
+    id: u64,
     skip_list: SkipList,
     size: AtomicUsize,
     max_size: usize,
 }
 
 impl MemTable {
-    pub fn with_max_size(max_size: usize) -> Self {
+    pub fn new(id: u64) -> Self {
+        Self::with_max_size(id, MAX_SIZE)
+    }
+
+    pub fn with_max_size(id: u64, max_size: usize) -> Self {
         let skip_list = SkipList::new();
         Self {
+            id,
             skip_list,
             size: AtomicUsize::new(0),
             max_size,
@@ -49,11 +55,9 @@ impl MemTable {
     pub fn iter(&self) -> Iter<'_> {
         self.skip_list.iter()
     }
-}
 
-impl Default for MemTable {
-    fn default() -> Self {
-        Self::with_max_size(MAX_SIZE)
+    pub fn id(&self) -> u64 {
+        self.id
     }
 }
 
@@ -64,7 +68,7 @@ mod tests {
 
     #[test]
     fn get_set() {
-        let mem_table = MemTable::default();
+        let mem_table = MemTable::new(0);
         for i in 0..100 {
             let key = Key(format!("{}", i), 1);
             let value = Value::Set(format!("{}", i * 2));

@@ -27,7 +27,7 @@ impl Collection {
         let restored = wal.restore().await?;
         let writer = wal.new_writer().await?;
         let storage = Storage::load(dir.as_ref()).await?;
-        let state = State::new(writer, restored.tables, storage);
+        let state = State::new(writer, restored.tables, storage)?;
         Ok(Self {
             seq: AtomicU64::new(restored.max_seq + 1),
             state: RwLock::new(Arc::new(state)),
@@ -87,8 +87,9 @@ impl Collection {
     }
 
     async fn force_freeze(&self, _g: &MutexGuard<'_, ()>) -> DbResult<()> {
-        let new_mt = Arc::new(MemTable::default());
         let new_wal = Arc::new(self.wal.new_writer().await?);
+        let id: u64 = new_wal.id().parse()?;
+        let new_mt = Arc::new(MemTable::new(id));
         {
             let mut guard = self.state.write().await;
             let mut snapshot = guard.as_ref().clone();

@@ -1,4 +1,7 @@
-use std::{io::ErrorKind, path::Path};
+use std::{
+    io::ErrorKind,
+    path::{Path, PathBuf},
+};
 
 use common::{DbResult, error::DbError, key::Key, value::Value};
 use tokio::{
@@ -8,11 +11,13 @@ use tokio::{
 };
 
 pub struct WalWriter {
+    id: String,
     file: Mutex<BufWriter<File>>,
 }
 
 impl WalWriter {
     pub async fn open<P: AsRef<Path>>(path: P) -> DbResult<Self> {
+        let id = wal_id(path.as_ref())?;
         let file = OpenOptions::new()
             .append(true)
             .create(true)
@@ -21,6 +26,7 @@ impl WalWriter {
             .await?;
         let writer = BufWriter::new(file);
         Ok(Self {
+            id,
             file: Mutex::new(writer),
         })
     }
@@ -47,14 +53,20 @@ impl WalWriter {
         file.sync_all().await?;
         Ok(())
     }
+
+    pub fn id(&self) -> &str {
+        &self.id
+    }
 }
 
 pub struct WalReader {
+    id: String,
     reader: BufReader<File>,
 }
 
 impl WalReader {
     pub async fn open<P: AsRef<Path>>(path: P) -> DbResult<Self> {
+        let id = wal_id(path.as_ref())?;
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -63,7 +75,7 @@ impl WalReader {
             .open(path)
             .await?;
         let reader = BufReader::new(file);
-        Ok(Self { reader })
+        Ok(Self { id, reader })
     }
 
     pub async fn next(&mut self) -> DbResult<Option<(Key, Value)>> {
@@ -73,6 +85,10 @@ impl WalReader {
         };
         let value = self.read_value().await?;
         Ok(Some((key, value)))
+    }
+
+    pub fn id(&self) -> &str {
+        &self.id
     }
 
     async fn read_key(&mut self) -> DbResult<Option<Key>> {
@@ -100,6 +116,15 @@ impl WalReader {
         self.reader.read_exact(&mut value).await?;
         Ok(String::from_utf8_lossy(&value).to_string())
     }
+}
+
+fn wal_id(path: &Path) -> DbResult<String> {
+    let id = PathBuf::from(path)
+        .file_name()
+        .ok_or(DbError::invalid_state("cannot get wal filename"))?
+        .to_string_lossy()
+        .to_string();
+    Ok(id)
 }
 
 #[cfg(test)]

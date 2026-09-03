@@ -83,7 +83,7 @@ async fn restore_tables(mut wals: Vec<WalReader>) -> DbResult<Restored> {
     let mut max_seq = 0;
 
     for wal in wals.iter_mut() {
-        let table = MemTable::default();
+        let table = MemTable::new(wal.id().parse::<u64>()?);
         while let Some((key, value)) = wal.next().await? {
             max_seq = max_seq.max(key.1);
             table.set(key, value);
