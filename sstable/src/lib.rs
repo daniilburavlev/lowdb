@@ -54,6 +54,37 @@ mod tests {
         }
     }
 
+    /// Every entry is 64 bytes on disk (2 + 12 key + 8 seq + 2 + 40 value), so the 64th
+    /// `add` takes the block to 6 + 4096 bytes and flushes it: the writer must not then
+    /// emit a second, payload-less block from `finish`.
+    #[tokio::test]
+    async fn last_add_fills_block_exactly() {
+        const ENTRIES: usize = 64;
+
+        let file = NamedTempFile::new().unwrap();
+        let mut writer = SSTableWriter::create(file.path()).await.unwrap();
+        for i in 0..ENTRIES {
+            let key = Key(format!("key{:09}", i), i as u64);
+            writer.add(&key, &Value::Set("v".repeat(40))).await.unwrap();
+        }
+        let meta = writer.finish().await.unwrap().unwrap();
+
+        assert_eq!(meta.index.len(), 1, "no empty trailing block");
+        assert_eq!(
+            meta.file_size,
+            tokio::fs::metadata(file.path()).await.unwrap().len(),
+            "reported size matches the bytes on disk"
+        );
+
+        let mut scan = TableScan::open(file.path()).await.unwrap();
+        let mut read = 0;
+        while let Some((k, _)) = scan.next().await.unwrap() {
+            assert_eq!(k.0, format!("key{:09}", read));
+            read += 1;
+        }
+        assert_eq!(read, ENTRIES);
+    }
+
     async fn write_to_disk() -> (NamedTempFile, BTreeMap<Key, Value>) {
         let file = NamedTempFile::new().unwrap();
         let mut writer = SSTableWriter::create(file.path()).await.unwrap();

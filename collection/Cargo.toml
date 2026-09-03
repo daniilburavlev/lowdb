@@ -5,7 +5,6 @@ version.workspace = true
 
 [dependencies]
 common = { path = "../common" }
-chrono.workspace = true
 dashmap.workspace = true
 memtable = { path = "../memtable" }
 sstable = { path = "../sstable" }
