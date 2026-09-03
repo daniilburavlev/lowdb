@@ -15,12 +15,14 @@ use tokio::{
     sync::Mutex,
 };
 
+use crate::tables::SSTables;
+
 const TABLES_DIR: &str = "ss";
 
 pub(crate) struct Storage {
     dir: PathBuf,
     id: AtomicU64,
-    tables: DashMap<u32, Vec<Arc<SSTable>>>,
+    tables: DashMap<u32, SSTables>,
     lock: Mutex<()>,
 }
 
@@ -42,13 +44,15 @@ impl Storage {
 
         let max_id = files.iter().map(|(_, id, _)| *id).max().unwrap_or(0);
         let tables = DashMap::new();
+
         for (level, _, path) in files {
             let table = SSTable::open(path).await?;
             tables
                 .entry(level)
-                .or_insert_with(Vec::new)
+                .or_insert_with(SSTables::new)
                 .push(Arc::new(table));
         }
+
         Ok(Self {
             dir,
             id: AtomicU64::new(max_id + 1),
@@ -70,7 +74,7 @@ impl Storage {
             let table = SSTable::new(meta)?;
             self.tables
                 .entry(0)
-                .or_insert_with(Vec::new)
+                .or_insert_with(SSTables::new)
                 .insert(0, Arc::new(table));
         }
         Ok(())
@@ -85,7 +89,7 @@ impl Storage {
                 continue;
             };
 
-            for table in tables {
+            for table in tables.search() {
                 match table.get(key, u64::MAX).await? {
                     Lookup::Absent => {}
                     lookup => return Ok(lookup),

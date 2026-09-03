@@ -11,6 +11,7 @@ use crate::{state::State, storage::Storage, wal::Wal};
 
 mod state;
 mod storage;
+mod tables;
 mod wal;
 
 pub struct Collection {
