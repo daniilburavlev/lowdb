@@ -11,6 +11,9 @@ use crate::{
     read::ReadFrom,
 };
 
+/// `u32 crc32 | u16 payload_len`, mirroring `writer::BLOCK_HEADER`.
+const BLOCK_HEADER: u64 = 4 + 2;
+
 pub struct TableScan {
     r: BufReader<File>,
     block_remaining: u16,
@@ -21,6 +24,9 @@ impl TableScan {
     pub async fn open(path: &Path) -> DbResult<Self> {
         let mut f = File::open(path).await?;
         let size = f.metadata().await?.len();
+        if (size as usize) < FOOTER_LEN {
+            return Err(DbError::invalid_state("sstable is shorter than the footer"));
+        }
         f.seek(io::SeekFrom::Start(size - FOOTER_LEN as u64))
             .await?;
         let footer = Footer::read(&mut f).await?;
@@ -38,6 +44,14 @@ impl TableScan {
         }
         if self.block_remaining == 0 {
             self.check_block().await?;
+            if self.block_remaining == 0 {
+                // Tables written before the payload-less-block fix end with a bare
+                // header; anything else with an empty block mid-file is corrupt.
+                return match self.remaining {
+                    0 => Ok(None),
+                    _ => Err(DbError::invalid_state("empty block before end of table")),
+                };
+            }
         }
         let key = Key::read(&mut self.r).await?;
         let mut used = key.disk_size();
@@ -45,15 +59,26 @@ impl TableScan {
         let value = Value::read(&mut self.r).await?;
         used += value.disk_size();
 
-        self.block_remaining -= used as u16;
-        self.remaining -= used as u64;
+        // Both counters come from the block header and the footer; if they disagree with
+        // the bytes actually read the table is corrupt, which must not panic on underflow.
+        self.block_remaining = (self.block_remaining as usize)
+            .checked_sub(used)
+            .and_then(|n| u16::try_from(n).ok())
+            .ok_or(DbError::invalid_state("entry crosses the block boundary"))?;
+        self.remaining = self
+            .remaining
+            .checked_sub(used as u64)
+            .ok_or(DbError::invalid_state("entry runs past the last block"))?;
         Ok(Some((key, value)))
     }
 
     async fn check_block(&mut self) -> DbResult<()> {
         let sum = self.r.read_u32().await?;
         let len = self.r.read_u16().await?;
-        self.remaining -= 6;
+        self.remaining = self
+            .remaining
+            .checked_sub(BLOCK_HEADER)
+            .ok_or(DbError::invalid_state("truncated block header"))?;
 
         let pos = self.r.seek(SeekFrom::Current(0)).await?;
         let mut buf = vec![0u8; len as usize];

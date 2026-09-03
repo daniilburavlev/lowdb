@@ -30,9 +30,9 @@ impl SSTableMeta {
         let file = File::open(&path).await?;
         let metadata = file.metadata().await?;
         let file_size = metadata.len();
-        if file_size == 0 {
+        if (file_size as usize) < FOOTER_LEN {
             return Err(DbError::invalid_state(
-                "cannot read metadata: file is empty",
+                "cannot read metadata: file is shorter than the footer",
             ));
         }
         let mut reader = BufReader::new(file);
@@ -85,7 +85,10 @@ impl SSTableMeta {
         read.seek(SeekFrom::Start(offset)).await?;
         while len > 0 {
             let key = IndexedKey::read(read).await?;
-            len -= key.disk_size();
+            // A corrupt `index_len` must not wrap the counter into an endless read.
+            len = len
+                .checked_sub(key.disk_size())
+                .ok_or(DbError::invalid_state("index length does not match entries"))?;
             index.push(key);
         }
         Ok(index)
