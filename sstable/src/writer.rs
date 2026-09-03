@@ -16,6 +16,7 @@ use crate::{
 };
 
 const BLOCK_SIZE: usize = 4 * 1024;
+const BLOCK_HEADER: usize = 4 + 2;
 const BITS_PER_KEY: usize = 10;
 const WRITE_BUF: usize = 1024 * 1024;
 
@@ -46,8 +47,7 @@ impl SSTableWriter {
         let f = File::create(&tmp).await?;
         // Create empty block with start space for checksum: 4 bytes + payload's len: 2 bytes
         let mut block = Vec::with_capacity(BLOCK_SIZE + 1024);
-        put_u32(&mut block, 0);
-        put_u16(&mut block, 0);
+        reset_block(&mut block);
 
         Ok(Self {
             file: BufWriter::with_capacity(WRITE_BUF, f),
@@ -98,7 +98,7 @@ impl SSTableWriter {
     }
 
     async fn flush_block(&mut self) -> DbResult<()> {
-        if self.block.is_empty() {
+        if self.block.len() <= BLOCK_HEADER {
             return Ok(());
         }
         let last = self
@@ -106,11 +106,11 @@ impl SSTableWriter {
             .clone()
             .ok_or(DbError::invalid_state("last block is none"))?;
 
-        let crc = crc32fast::hash(&self.block[6..]);
+        let crc = crc32fast::hash(&self.block[BLOCK_HEADER..]);
         set_u32(&mut self.block, 0, crc);
 
         let len: u16 = self.block.len().try_into()?;
-        let payload_len = len - 6;
+        let payload_len = len - BLOCK_HEADER as u16;
         set_u16(&mut self.block, 4, payload_len);
 
         self.file.write_all(&self.block).await?;
@@ -122,8 +122,7 @@ impl SSTableWriter {
         self.offset += len as u64;
         self.block.clear();
         // Realloc space for block header
-        put_u32(&mut self.block, 0);
-        put_u16(&mut self.block, 0);
+        reset_block(&mut self.block);
         Ok(())
     }
 
@@ -179,6 +178,11 @@ impl SSTableWriter {
             footer,
         }))
     }
+}
+
+fn reset_block(block: &mut Vec<u8>) {
+    put_u32(block, 0);
+    put_u16(block, 0);
 }
 
 async fn sync_dir(dir: &Path) -> DbResult<()> {

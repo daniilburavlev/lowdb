@@ -5,8 +5,6 @@ version.workspace = true
 
 [dependencies]
 common = { path = "../common" }
-rand.workspace = true
-wal = { path = "../wal" }
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -3,7 +3,6 @@ use std::{
     sync::{Arc, atomic::AtomicU64},
 };
 
-use chrono::Utc;
 use common::{DbResult, key::Key, lookup::Lookup, value::Value};
 use memtable::MemTable;
 use tokio::sync::{Mutex, MutexGuard, RwLock};
@@ -24,14 +23,13 @@ pub struct Collection {
 
 impl Collection {
     pub async fn open<P: AsRef<Path>>(dir: P) -> DbResult<Self> {
-        let timestamp = Utc::now().timestamp() as u64;
         let wal = Wal::new(dir.as_ref()).await?;
-        let tables = wal.restore().await?;
+        let restored = wal.restore().await?;
         let writer = wal.new_writer().await?;
         let storage = Storage::load(dir.as_ref()).await?;
-        let state = State::new(writer, tables, storage);
+        let state = State::new(writer, restored.tables, storage);
         Ok(Self {
-            seq: AtomicU64::new(timestamp),
+            seq: AtomicU64::new(restored.max_seq + 1),
             state: RwLock::new(Arc::new(state)),
             state_lock: Mutex::new(()),
             flush_notify: tokio::sync::Notify::default(),
