@@ -1,5 +1,7 @@
 use common::{DbResult, error::DbError, key::Key};
 
+use crate::BLOCK_HEADER;
+
 pub(crate) struct Cursor<'a> {
     buf: &'a [u8],
     pos: usize,
@@ -51,8 +53,18 @@ impl<'a> PartialOrd<Key> for EntryRef<'a> {
 }
 
 impl<'a> Cursor<'a> {
-    pub(crate) fn new(buf: &'a [u8]) -> Self {
-        Self { buf, pos: 0 }
+    pub(crate) fn new(buf: &'a [u8]) -> DbResult<Self> {
+        let mut cursor = Self { buf, pos: 0 };
+        let checksum = cursor.u32()?;
+        let len = cursor.u16()?;
+        let payload = buf
+            .get(BLOCK_HEADER..BLOCK_HEADER + len as usize)
+            .ok_or(DbError::invalid_state("invalid block bytes"))?;
+        let hash = crc32fast::hash(payload);
+        if hash != checksum {
+            return Err(DbError::invalid_state("block corrupted"));
+        }
+        Ok(cursor)
     }
 
     #[inline]

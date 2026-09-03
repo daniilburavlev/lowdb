@@ -19,6 +19,8 @@ pub mod table;
 pub(crate) mod write;
 pub mod writer;
 
+pub(crate) const BLOCK_HEADER: usize = 4 + 2;
+
 pub async fn build_from_iter<I>(path: impl Into<PathBuf>, iter: I) -> DbResult<Option<SSTableMeta>>
 where
     I: IntoIterator<Item = (Key, Value)>,
@@ -32,7 +34,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, f32::consts::E};
+    use std::collections::BTreeMap;
 
     use crate::scan::table::TableScan;
     use tempfile::NamedTempFile;

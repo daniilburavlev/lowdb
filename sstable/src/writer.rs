@@ -7,6 +7,7 @@ use tokio::{
 };
 
 use crate::{
+    BLOCK_HEADER,
     bloom::BloomFilter,
     encode::{encode, put_u16, put_u32, set_u16, set_u32},
     footer::{FOOTER_LEN, Footer, MAGIC},
@@ -16,7 +17,6 @@ use crate::{
 };
 
 const BLOCK_SIZE: usize = 4 * 1024;
-const BLOCK_HEADER: usize = 4 + 2;
 const BITS_PER_KEY: usize = 10;
 const WRITE_BUF: usize = 1024 * 1024;
 

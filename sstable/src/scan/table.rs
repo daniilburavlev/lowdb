@@ -7,11 +7,10 @@ use tokio::{
 };
 
 use crate::{
+    BLOCK_HEADER,
     footer::{FOOTER_LEN, Footer},
     read::ReadFrom,
 };
-
-const BLOCK_HEADER: u64 = 4 + 2;
 
 pub struct TableScan {
     r: BufReader<File>,
@@ -74,7 +73,7 @@ impl TableScan {
         let len = self.r.read_u16().await?;
         self.remaining = self
             .remaining
-            .checked_sub(BLOCK_HEADER)
+            .checked_sub(BLOCK_HEADER as u64)
             .ok_or(DbError::invalid_state("truncated block header"))?;
 
         let pos = self.r.seek(SeekFrom::Current(0)).await?;

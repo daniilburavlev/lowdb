@@ -53,7 +53,7 @@ impl SSTable {
         };
 
         let block = self.read_block(handle).await?;
-        let mut c = Cursor::new(&block);
+        let mut c = Cursor::new(&block)?;
         while let Some(entry) = c.next_entry()? {
             if entry < target {
                 continue;
