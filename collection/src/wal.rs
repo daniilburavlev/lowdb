@@ -43,6 +43,21 @@ impl Wal {
         let writer = WalWriter::open(&path).await?;
         Ok(writer)
     }
+
+    /// Drop the log whose memtable has reached disk.
+    ///
+    /// Only safe once the corresponding SSTable is durable: until then this log
+    /// is the only copy of those writes. A crash between the table rename and
+    /// this unlink just leaves a redundant log — replaying it re-inserts entries
+    /// that carry their original sequence numbers, which shadow the identical
+    /// copies already in the table.
+    pub(crate) async fn remove(&self, id: u64) -> DbResult<()> {
+        match fs::remove_file(self.path.join(format!("{}", id))).await {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e.into()),
+        }
+    }
 }
 
 async fn wal_ids<P: AsRef<Path>>(dir: P) -> DbResult<Vec<u64>> {
