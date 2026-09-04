@@ -56,6 +56,15 @@ impl MemTable {
         self.skip_list.iter()
     }
 
+    /// Number of entries, counting every version of a user key separately.
+    pub fn len(&self) -> usize {
+        self.skip_list.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.skip_list.is_empty()
+    }
+
     pub fn id(&self) -> u64 {
         self.id
     }

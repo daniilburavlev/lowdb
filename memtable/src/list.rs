@@ -207,6 +207,14 @@ pub struct Iter<'a> {
     curr: *mut Node,
 }
 
+// SAFETY: same argument as `SkipList: Sync`. A node's key and value are never
+// mutated after it is published, nodes are only freed by `SkipList::drop` —
+// which the `&'a SkipList` borrow rules out — and the `Acquire` load of
+// `tower[0]` synchronizes with the `Release` store in `insert`, so a node's
+// contents are visible on whatever thread the iterator ends up on. Needed
+// because a flush holds an iterator across `await` points.
+unsafe impl Send for Iter<'_> {}
+
 impl<'a> Iterator for Iter<'a> {
     type Item = (&'a Key, &'a Value);
 

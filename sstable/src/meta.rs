@@ -25,6 +25,21 @@ pub struct SSTableMeta {
 }
 
 impl SSTableMeta {
+    /// Lowest sequence number stored in the table.
+    pub fn smallest_seq(&self) -> u64 {
+        self.footer.smallest_seq
+    }
+
+    /// Highest sequence number stored in the table.
+    pub fn largest_seq(&self) -> u64 {
+        self.footer.largest_seq
+    }
+
+    /// Number of entries stored in the table.
+    pub fn entries(&self) -> u64 {
+        self.footer.entries
+    }
+
     pub async fn read(path: impl Into<PathBuf>) -> DbResult<Self> {
         let path = path.into();
         let file = File::open(&path).await?;
