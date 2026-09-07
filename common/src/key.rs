@@ -1,15 +1,21 @@
+//! Key module
+
+/// Handles user's key data and sequence number
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Key(pub String, pub u64);
 
 impl Key {
+    /// Crate new key from string reference & seq
     pub fn new(key: &str, seq: u64) -> Self {
         Self(key.to_owned(), seq)
     }
 
+    /// The size in bytes in memory
     pub fn heap_size(&self) -> usize {
         self.0.len() + 8
     }
 
+    /// The size of key in bytes on disk
     pub fn disk_size(&self) -> usize {
         2 + self.heap_size()
     }

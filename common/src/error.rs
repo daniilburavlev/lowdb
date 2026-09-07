@@ -1,3 +1,4 @@
+//! Error module
 use std::{
     array::TryFromSliceError,
     num::{ParseIntError, TryFromIntError},
@@ -5,21 +6,25 @@ use std::{
 
 use thiserror::Error;
 
+/// A simple error type, used for IO/logic errors
 #[derive(Debug, Error)]
 pub enum DbError {
+    /// Integer parsing error
     #[error("{0}")]
     InvalidInt(String),
+    /// IO
     #[error("IO :{0}")]
     IO(#[from] std::io::Error),
-    #[error("{0}")]
-    Unexpected(String),
+    /// Shows not valid input data
     #[error("{0}")]
     InvalidValue(String),
+    /// Shows part of system is in invalid state. i.e badly written file
     #[error("{0}")]
     InvalidState(String),
 }
 
 impl DbError {
+    /// Crates `DbError::InvalidState` fro string reference
     pub fn invalid_state(msg: &str) -> Self {
         Self::InvalidState(msg.to_string())
     }
