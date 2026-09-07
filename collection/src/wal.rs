@@ -6,7 +6,7 @@ use std::{
 use common::DbResult;
 use memtable::MemTable;
 use tokio::fs;
-use wal::wal::{WalReader, WalWriter};
+use wal::{WalReader, WalWriter};
 
 const WAL_DIR: &str = "wal";
 
@@ -42,6 +42,14 @@ impl Wal {
         let path = self.path.join(format!("{}", id));
         let writer = WalWriter::open(&path).await?;
         Ok(writer)
+    }
+
+    pub(crate) async fn remove(&self, id: u64) -> DbResult<()> {
+        match fs::remove_file(self.path.join(format!("{}", id))).await {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e.into()),
+        }
     }
 }
 

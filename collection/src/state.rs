@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use common::DbResult;
 use memtable::MemTable;
-use wal::wal::WalWriter;
+use wal::WalWriter;
 
 use crate::storage::Storage;
 

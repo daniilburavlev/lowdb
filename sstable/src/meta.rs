@@ -63,6 +63,18 @@ impl SSTableMeta {
         })
     }
 
+    pub fn smallest_seq(&self) -> u64 {
+        self.footer.smallest_seq
+    }
+
+    pub fn largest_seq(&self) -> u64 {
+        self.footer.largest_seq
+    }
+
+    pub fn entries(&self) -> u64 {
+        self.footer.entries
+    }
+
     async fn footer(size: u64, read: &mut BufReader<File>) -> DbResult<Footer> {
         read.seek(SeekFrom::Start(size - FOOTER_LEN as u64)).await?;
         Footer::read(read).await

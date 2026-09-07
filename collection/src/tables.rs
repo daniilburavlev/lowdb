@@ -1,4 +1,4 @@
-use std::{iter::Rev, sync::Arc};
+use std::sync::Arc;
 
 use sstable::table::SSTable;
 
@@ -18,16 +18,11 @@ impl SSTables {
         self.0.insert(at, table);
     }
 
-    /// Iterate through the elements to burn to disk: Oldest -> Newest
-    pub(crate) fn flush(self) -> Rev<std::vec::IntoIter<Arc<SSTable>>> {
-        self.0.into_iter().rev()
-    }
-
-    /// Iterate through the elements to search: Newest -> Oldest
     pub(crate) fn search(self) -> std::vec::IntoIter<Arc<SSTable>> {
         self.0.into_iter()
     }
 
+    #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.0.len()
     }

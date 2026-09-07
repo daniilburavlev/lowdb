@@ -9,7 +9,10 @@ use std::{
 use common::{DbResult, lookup::Lookup};
 use dashmap::DashMap;
 use memtable::MemTable;
-use sstable::{table::SSTable, writer::SSTableWriter};
+use sstable::{
+    table::SSTable,
+    writer::{SSTableWriter, tmp_path},
+};
 use tokio::{
     fs::{self},
     sync::Mutex,
@@ -18,10 +21,12 @@ use tokio::{
 use crate::tables::SSTables;
 
 const TABLES_DIR: &str = "ss";
+const TMP_EXT: &str = "tmp";
 
 pub(crate) struct Storage {
     dir: PathBuf,
     id: AtomicU64,
+    max_seq: u64,
     tables: DashMap<u32, SSTables>,
     lock: Mutex<()>,
 }
@@ -33,20 +38,29 @@ impl Storage {
         let mut read_dir = fs::read_dir(&dir).await?;
 
         let mut files = vec![];
+        let mut stray = vec![];
         while let Some(entry) = read_dir.next_entry().await? {
+            let path = entry.path();
             let filename = entry.file_name();
             let filename = filename.to_string_lossy();
             if let Some((level, id)) = parse_name(&filename) {
-                files.push((level, id, entry.path()))
+                files.push((level, id, path))
+            } else if path.extension().is_some_and(|e| e == TMP_EXT) {
+                stray.push(path);
             }
+        }
+        for path in stray {
+            let _ = fs::remove_file(path).await;
         }
         files.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
 
         let max_id = files.iter().map(|(_, id, _)| *id).max().unwrap_or(0);
         let tables = DashMap::new();
+        let mut max_seq = 0;
 
         for (level, _, path) in files {
             let table = SSTable::open(path).await?;
+            max_seq = max_seq.max(table.meta.largest_seq());
             tables
                 .entry(level)
                 .or_insert_with(SSTables::new)
@@ -56,28 +70,47 @@ impl Storage {
         Ok(Self {
             dir,
             id: AtomicU64::new(max_id + 1),
+            max_seq,
             tables,
             lock: Mutex::new(()),
         })
     }
 
-    pub(crate) async fn l0(&self, mt: Arc<MemTable>) -> DbResult<()> {
+    pub(crate) fn max_seq(&self) -> u64 {
+        self.max_seq
+    }
+
+    pub(crate) async fn l0(&self, mt: &MemTable) -> DbResult<bool> {
         let _guard = self.lock.lock().await;
         let id = self.id.fetch_add(1, Relaxed);
         let path = self.dir.join(format!("0_{}", id));
 
-        let mut writer = SSTableWriter::create(&path).await?;
+        let result = self.write_l0(&path, mt).await;
+        if result.is_err() {
+            let _ = fs::remove_file(tmp_path(&path)).await;
+        }
+        result
+    }
+
+    async fn write_l0(&self, path: &Path, mt: &MemTable) -> DbResult<bool> {
+        let mut writer = SSTableWriter::create(path).await?;
+        let mut previous = None::<&str>;
         for (k, v) in mt.iter() {
+            if previous == Some(k.0.as_str()) {
+                continue;
+            }
             writer.add(k, v).await?;
+            previous = Some(k.0.as_str());
         }
-        if let Some(meta) = writer.finish().await? {
-            let table = SSTable::new(meta)?;
-            self.tables
-                .entry(0)
-                .or_insert_with(SSTables::new)
-                .insert(0, Arc::new(table));
-        }
-        Ok(())
+        let Some(meta) = writer.finish().await? else {
+            return Ok(false);
+        };
+        let table = SSTable::new(meta)?;
+        self.tables
+            .entry(0)
+            .or_insert_with(SSTables::new)
+            .insert(0, Arc::new(table));
+        Ok(true)
     }
 
     pub(crate) async fn get(&self, key: &str) -> DbResult<Lookup> {
@@ -111,6 +144,63 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+
+    #[tokio::test]
+    async fn l0_writes_one_entry_per_user_key() {
+        let dir = tempdir().unwrap();
+        let storage = Storage::load(dir.path()).await.unwrap();
+
+        let mt = MemTable::new(0);
+        mt.set(Key::new("a", 1), Value::set("old"));
+        mt.set(Key::new("a", 2), Value::set("new"));
+        mt.set(Key::new("b", 3), Value::Delete);
+
+        assert!(storage.l0(&mt).await.unwrap());
+
+        let path = dir.path().join(TABLES_DIR).join("0_1");
+        let meta = sstable::meta::SSTableMeta::read(&path).await.unwrap();
+        assert_eq!(meta.entries(), 2, "superseded version must be dropped");
+        assert_eq!(meta.largest_seq(), 3);
+        assert_eq!(meta.smallest_seq(), 2);
+
+        let Lookup::Found(value) = storage.get("a").await.unwrap() else {
+            panic!("newest version must survive");
+        };
+        assert_eq!(value, "new");
+        assert!(matches!(storage.get("b").await.unwrap(), Lookup::Deleted));
+
+        // The sequence high-water mark survives a reload without the WAL.
+        let reloaded = Storage::load(dir.path()).await.unwrap();
+        assert_eq!(reloaded.max_seq(), 3);
+    }
+
+    #[tokio::test]
+    async fn l0_of_an_empty_memtable_writes_nothing() {
+        let dir = tempdir().unwrap();
+        let storage = Storage::load(dir.path()).await.unwrap();
+
+        assert!(!storage.l0(&MemTable::new(0)).await.unwrap());
+
+        let mut entries = fs::read_dir(dir.path().join(TABLES_DIR)).await.unwrap();
+        assert!(
+            entries.next_entry().await.unwrap().is_none(),
+            "no file, not even a temp one, may be left behind"
+        );
+    }
+
+    #[tokio::test]
+    async fn load_sweeps_stray_temp_files() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join(TABLES_DIR);
+        fs::create_dir_all(&path).await.unwrap();
+        fs::write(path.join("0_7.sst.tmp"), b"half written")
+            .await
+            .unwrap();
+
+        Storage::load(dir.path()).await.unwrap();
+
+        assert!(!fs::try_exists(path.join("0_7.sst.tmp")).await.unwrap());
+    }
 
     #[tokio::test]
     async fn load_files_by_levels() {

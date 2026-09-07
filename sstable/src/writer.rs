@@ -19,6 +19,7 @@ use crate::{
 const BLOCK_SIZE: usize = 4 * 1024;
 const BITS_PER_KEY: usize = 10;
 const WRITE_BUF: usize = 1024 * 1024;
+const TMP_EXT: &str = "sst.tmp";
 
 pub struct SSTableWriter {
     file: BufWriter<File>,
@@ -40,10 +41,14 @@ pub struct SSTableWriter {
     largest_seq: u64,
 }
 
+pub fn tmp_path(path: &Path) -> PathBuf {
+    path.with_extension(TMP_EXT)
+}
+
 impl SSTableWriter {
     pub async fn create(path: impl Into<PathBuf>) -> DbResult<Self> {
         let path = path.into();
-        let tmp = path.with_extension("sst.tmp");
+        let tmp = tmp_path(&path);
         let f = File::create(&tmp).await?;
         // Create empty block with start space for checksum: 4 bytes + payload's len: 2 bytes
         let mut block = Vec::with_capacity(BLOCK_SIZE + 1024);
@@ -155,6 +160,8 @@ impl SSTableWriter {
             index_off,
             index_len,
             index_count: self.index.len() as u32,
+            smallest_seq: self.smallest_seq,
+            largest_seq: self.largest_seq,
             magic: MAGIC,
         };
         footer.write(&mut self.file).await?;

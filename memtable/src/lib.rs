@@ -56,6 +56,14 @@ impl MemTable {
         self.skip_list.iter()
     }
 
+    pub fn len(&self) -> usize {
+        self.skip_list.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.skip_list.is_empty()
+    }
+
     pub fn id(&self) -> u64 {
         self.id
     }

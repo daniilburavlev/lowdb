@@ -207,6 +207,8 @@ pub struct Iter<'a> {
     curr: *mut Node,
 }
 
+unsafe impl Send for Iter<'_> {}
+
 impl<'a> Iterator for Iter<'a> {
     type Item = (&'a Key, &'a Value);
 
