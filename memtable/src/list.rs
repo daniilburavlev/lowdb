@@ -1,3 +1,4 @@
+//! Partially implemented (inserts only) non-blocking skip list
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use std::{cell::Cell, sync::atomic::AtomicU64};
@@ -12,10 +13,16 @@ use std::cmp::Ordering as Cmp;
 
 pub(crate) mod node;
 
+/// Maximum number of layers (levels) stacked on top of each other
 pub(crate) const MAX_HEIGHT: usize = 16;
+/// Chance to grow height is `1/BRANCHING` (25%)
 const BRANCHING: u64 = 4;
 
+/// Stores sorted nodes
+/// [0]-------->[3]
+/// [0]-->[1]-->[3]
 pub(crate) struct SkipList {
+    // First element's tower
     head: [AtomicPtr<Node>; MAX_HEIGHT],
     max_height: AtomicUsize,
     len: AtomicUsize,
@@ -35,12 +42,10 @@ impl SkipList {
         }
     }
 
-    #[allow(dead_code)]
     pub(crate) fn len(&self) -> usize {
         self.len.load(Relaxed)
     }
 
-    #[allow(dead_code)]
     pub(crate) fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -49,6 +54,7 @@ impl SkipList {
         self.mem_usage.load(Relaxed)
     }
 
+    // Get node by level from `pred` if not empty, otherwise get by level from head
     #[inline]
     fn slot(&self, pred: *mut Node, level: usize) -> &AtomicPtr<Node> {
         match unsafe { pred.as_ref() } {
@@ -57,6 +63,21 @@ impl SkipList {
         }
     }
 
+    // Generate random height
+    // Compare height with existing max height in CAS loop
+    //   if height is greater than current, try to swap
+    //
+    // Allocate new node by key value and tower of current height
+    //
+    // Create preds array of length 16
+    // Create succs array of length 16
+    //
+    // Try find current key seq pair; if pair exists, drop allocated node and return false
+    //
+    // If found value equal source => drop allocated node and return false
+    //
+    // Make new node current level of tower point to succ level
+    // Replace pred level tower to point to new node in CAS loop
     pub(crate) fn insert(&self, key: Key, value: Value) -> bool {
         let height = random_height();
         let mut observed = self.max_height.load(Relaxed);
@@ -69,6 +90,7 @@ impl SkipList {
                 Err(actual) => observed = actual,
             }
         }
+
         let node = Node::alloc(key, value, height);
         let (key, seq) = unsafe { ((*node).key.0.clone(), (*node).key.1) };
         let mut preds = [ptr::null_mut::<Node>(); MAX_HEIGHT];
@@ -109,6 +131,14 @@ impl SkipList {
         true
     }
 
+    // For each level from [n..0]
+    // If pred is not empty, get as current; otherwise, get head
+    //
+    // Iterate through Node pointers of current level
+    //
+    // If value less, use current as pred, get new as current node
+    // If >= stop loop
+    // Store found values in arrays
     fn find(
         &self,
         key: &str,
@@ -139,13 +169,13 @@ impl SkipList {
         }
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn get(&self, key: &str) -> Option<&Value> {
-        self.get_at(key, u64::MAX)
-    }
-
     pub(crate) fn get_at(&self, key: &str, snapshot: u64) -> Option<&Value> {
         self.get_entry_at(key, snapshot).map(|(_, v)| v)
+    }
+
+    #[cfg(test)]
+    fn get(&self, key: &str) -> Option<&Value> {
+        self.get_at(key, u64::MAX)
     }
 
     pub(crate) fn get_entry_at(&self, key: &str, snapshot: u64) -> Option<(&Key, &Value)> {
@@ -157,6 +187,11 @@ impl SkipList {
         }
     }
 
+    // Get current list's max height
+    // Iterator other heights 0..max
+    // In each height:
+    //  get pred || head's node by level
+    //  find node with nearest or equal key
     fn seek(&self, key: &str, seq: u64) -> *mut Node {
         let max_h = self.max_height.load(Relaxed);
         let mut pred: *mut Node = ptr::null_mut();
@@ -175,7 +210,6 @@ impl SkipList {
         curr
     }
 
-    #[allow(dead_code)]
     pub(crate) fn iter(&self) -> Iter<'_> {
         Iter {
             _list: self,
@@ -221,6 +255,10 @@ impl<'a> Iterator for Iter<'a> {
 }
 
 fn random_height() -> usize {
+    // Thread local RNG state:
+    //
+    // - each thread maintains its own 64-bit random state
+    // - `Cell` allowes mutable access without synchronization, initialized with 0
     thread_local! {
         static RNG: Cell<u64> = const { Cell::new(0) };
     }
@@ -237,6 +275,10 @@ fn random_height() -> usize {
             x ^= x << 13;
             x ^= x >> 7;
             x ^= x << 17;
+            // Height = 1: 75% probability (3/4)
+            // Height = 2: 18.75% (1/4 × 3/4)
+            // Height = 3: 4.6875% (1/4² × 3/4)
+            // Height ≥ n: (1/4)^(n-1)
             if height < MAX_HEIGHT && x % BRANCHING == 0 {
                 height += 1;
             } else {
@@ -253,45 +295,48 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
-    fn set(s: &str) -> Value {
-        Value::Set(s.to_owned())
-    }
-
     #[test]
     fn insert_and_get() {
         let list = SkipList::new();
-        assert!(list.insert(Key::new("apple", 1), set("a1")));
-        assert!(list.insert(Key::new("banana", 2), set("b2")));
-        assert!(list.insert(Key::new("apple", 3), set("a3")));
+        assert!(list.insert(Key::new("apple", 1), Value::set("a1")));
+        assert!(list.insert(Key::new("banana", 2), Value::set("b2")));
+        assert!(list.insert(Key::new("apple", 3), Value::set("a3")));
 
-        assert_eq!(list.get("apple"), Some(&set("a3")));
-        assert_eq!(list.get("banana"), Some(&set("b2")));
+        assert_eq!(list.get("apple"), Some(&Value::set("a3")));
+        assert_eq!(list.get("banana"), Some(&Value::set("b2")));
         assert_eq!(list.get("cherry"), None);
         assert_eq!(list.len(), 3);
     }
 
     #[test]
+    fn insert_greater_to_lower() {
+        let list = SkipList::new();
+        assert!(list.insert(Key::new("b", 1), Value::Delete));
+        assert!(list.insert(Key::new("a", 2), Value::Delete));
+    }
+
+    #[test]
     fn tombstone_is_a_hit() {
         let list = SkipList::new();
-        list.insert(Key::new("k", 1), set("v"));
+        list.insert(Key::new("k", 1), Value::set("v"));
         list.insert(Key::new("k", 5), Value::Delete);
 
         assert_eq!(list.get("k"), Some(&Value::Delete));
         assert!(list.get("k").unwrap().is_delete());
         // Reading below the tombstone still sees the old value.
-        assert_eq!(list.get_at("k", 4), Some(&set("v")));
+        assert_eq!(list.get_at("k", 4), Some(&Value::set("v")));
     }
 
     #[test]
     fn snapshot_reads() {
         let list = SkipList::new();
         for seq in [10u64, 20, 30] {
-            list.insert(Key::new("k", seq), set(&format!("v{seq}")));
+            list.insert(Key::new("k", seq), Value::set(&format!("v{seq}")));
         }
         assert_eq!(list.get_at("k", 5), None);
-        assert_eq!(list.get_at("k", 10), Some(&set("v10")));
-        assert_eq!(list.get_at("k", 25), Some(&set("v20")));
-        assert_eq!(list.get_at("k", u64::MAX), Some(&set("v30")));
+        assert_eq!(list.get_at("k", 10), Some(&Value::set("v10")));
+        assert_eq!(list.get_at("k", 25), Some(&Value::set("v20")));
+        assert_eq!(list.get_at("k", u64::MAX), Some(&Value::set("v30")));
 
         let (key, _) = list.get_entry_at("k", 25).unwrap();
         assert_eq!(key.1, 20);
@@ -300,19 +345,19 @@ mod tests {
     #[test]
     fn duplicate_is_rejected() {
         let list = SkipList::new();
-        assert!(list.insert(Key::new("k", 7), set("first")));
-        assert!(!list.insert(Key::new("k", 7), set("second")));
-        assert_eq!(list.get("k"), Some(&set("first")));
+        assert!(list.insert(Key::new("k", 7), Value::set("first")));
+        assert!(!list.insert(Key::new("k", 7), Value::set("second")));
+        assert_eq!(list.get("k"), Some(&Value::set("first")));
         assert_eq!(list.len(), 1);
     }
 
     #[test]
     fn iteration_is_sorted_newest_first() {
         let list = SkipList::new();
-        list.insert(Key::new("b", 1), set("b1"));
-        list.insert(Key::new("a", 2), set("a2"));
+        list.insert(Key::new("b", 1), Value::set("b1"));
+        list.insert(Key::new("a", 2), Value::set("a2"));
         list.insert(Key::new("b", 9), Value::Delete);
-        list.insert(Key::new("a", 1), set("a1"));
+        list.insert(Key::new("a", 1), Value::set("a1"));
 
         let got: Vec<_> = list.iter().map(|(k, _)| (k.0.clone(), k.1)).collect();
         assert_eq!(
@@ -332,14 +377,17 @@ mod tests {
                 flushed.push((&k.0, v));
             }
         }
-        assert_eq!(flushed, vec![("a", &set("a2")), ("b", &Value::Delete)]);
+        assert_eq!(
+            flushed,
+            vec![("a", &Value::set("a2")), ("b", &Value::Delete)]
+        );
     }
 
     #[test]
     fn iter_from_seeks() {
         let list = SkipList::new();
         for k in ["a", "c", "e", "g"] {
-            list.insert(Key::new(k, 1), set(k));
+            list.insert(Key::new(k, 1), Value::set(k));
         }
         let got: Vec<_> = list
             .iter_from("c", u64::MAX)
@@ -362,7 +410,7 @@ mod tests {
                         let seq = t * PER_THREAD + i;
                         // Interleave key spaces so threads collide in the middle.
                         let key = format!("key{:06}", i * THREADS + t);
-                        assert!(list.insert(Key(key, seq), set(&format!("v{seq}"))));
+                        assert!(list.insert(Key(key, seq), Value::set(&format!("v{seq}"))));
                     }
                 })
             })
@@ -401,7 +449,7 @@ mod tests {
             let list = Arc::clone(&list);
             std::thread::spawn(move || {
                 for i in 0..5_000u64 {
-                    list.insert(Key(format!("key{i:06}"), i), set("v"));
+                    list.insert(Key(format!("key{i:06}"), i), Value::set("v"));
                 }
             })
         };

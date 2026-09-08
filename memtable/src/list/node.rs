@@ -6,6 +6,7 @@ use common::{key::Key, value::Value};
 pub(crate) struct Node {
     pub(crate) key: Key,
     pub(crate) value: Value,
+    // Tower of nodes by levels 0..height
     pub(crate) tower: Box<[AtomicPtr<Node>]>,
 }
 

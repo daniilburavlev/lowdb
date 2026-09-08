@@ -3,8 +3,6 @@
 
 //! Memory table implementation based on skip list.
 
-use std::sync::atomic::AtomicUsize;
-
 use common::{key::Key, lookup::Lookup, value::Value};
 
 use crate::list::SkipList;
@@ -20,7 +18,6 @@ const MAX_SIZE: usize = 64 * 1024 * 1024;
 pub struct MemTable {
     id: u64,
     skip_list: SkipList,
-    size: AtomicUsize,
     max_size: usize,
 }
 
@@ -36,22 +33,23 @@ impl MemTable {
         Self {
             id,
             skip_list,
-            size: AtomicUsize::new(0),
             max_size,
         }
     }
 
     /// Put key-value pair in skip list
     pub fn put(&self, key: Key, value: Value) {
-        let size = key.heap_size();
         self.skip_list.insert(key, value);
-        self.size
-            .fetch_add(size, std::sync::atomic::Ordering::Relaxed);
     }
 
-    /// Get latest stored valuze version by key
+    /// Get latest stored value version by key
     pub fn get(&self, key: &str) -> Lookup {
-        match self.skip_list.get(key).cloned() {
+        self.get_seq(key, u64::MAX)
+    }
+
+    /// Get stored value with max seq less than received
+    pub fn get_seq(&self, key: &str, seq: u64) -> Lookup {
+        match self.skip_list.get_at(key, seq).cloned() {
             Some(Value::Set(value)) => Lookup::Found(value),
             Some(Value::Delete) => Lookup::Deleted,
             None => Lookup::Absent,
