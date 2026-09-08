@@ -15,6 +15,18 @@ pub use list::Iter;
 const MAX_SIZE: usize = 64 * 1024 * 1024;
 
 /// Skip list wrapper, counting size in heap
+///
+/// # Example
+/// ```rust
+/// use memtable::MemTable;
+/// use common::lookup::Lookup;
+/// use common::key::Key;
+/// use common::value::Value;
+///
+/// let table = MemTable::new(0);
+/// table.put(Key::new("key", 1), Value::set("value"));
+/// assert_eq!(table.get("key"), Lookup::found("value"));
+/// ```
 pub struct MemTable {
     id: u64,
     skip_list: SkipList,

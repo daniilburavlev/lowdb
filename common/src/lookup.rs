@@ -10,3 +10,10 @@ pub enum Lookup {
     /// Key is not found
     Absent,
 }
+
+impl Lookup {
+    /// Create `Lookup::Found` from string pointer
+    pub fn found(value: &str) -> Self {
+        Self::Found(value.to_owned())
+    }
+}
