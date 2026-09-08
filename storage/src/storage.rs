@@ -23,7 +23,7 @@ use crate::tables::SSTables;
 const TABLES_DIR: &str = "ss";
 const TMP_EXT: &str = "tmp";
 
-pub(crate) struct Storage {
+pub(crate) struct DiskStorage {
     dir: PathBuf,
     id: AtomicU64,
     max_seq: u64,
@@ -31,7 +31,7 @@ pub(crate) struct Storage {
     lock: Mutex<()>,
 }
 
-impl Storage {
+impl DiskStorage {
     pub(crate) async fn load<P: AsRef<Path>>(dir: P) -> DbResult<Self> {
         let dir = dir.as_ref().join(TABLES_DIR);
         fs::create_dir_all(&dir).await?;
@@ -148,12 +148,12 @@ mod tests {
     #[tokio::test]
     async fn l0_writes_one_entry_per_user_key() {
         let dir = tempdir().unwrap();
-        let storage = Storage::load(dir.path()).await.unwrap();
+        let storage = DiskStorage::load(dir.path()).await.unwrap();
 
         let mt = MemTable::new(0);
-        mt.set(Key::new("a", 1), Value::set("old"));
-        mt.set(Key::new("a", 2), Value::set("new"));
-        mt.set(Key::new("b", 3), Value::Delete);
+        mt.put(Key::new("a", 1), Value::set("old"));
+        mt.put(Key::new("a", 2), Value::set("new"));
+        mt.put(Key::new("b", 3), Value::Delete);
 
         assert!(storage.l0(&mt).await.unwrap());
 
@@ -170,14 +170,14 @@ mod tests {
         assert!(matches!(storage.get("b").await.unwrap(), Lookup::Deleted));
 
         // The sequence high-water mark survives a reload without the WAL.
-        let reloaded = Storage::load(dir.path()).await.unwrap();
+        let reloaded = DiskStorage::load(dir.path()).await.unwrap();
         assert_eq!(reloaded.max_seq(), 3);
     }
 
     #[tokio::test]
     async fn l0_of_an_empty_memtable_writes_nothing() {
         let dir = tempdir().unwrap();
-        let storage = Storage::load(dir.path()).await.unwrap();
+        let storage = DiskStorage::load(dir.path()).await.unwrap();
 
         assert!(!storage.l0(&MemTable::new(0)).await.unwrap());
 
@@ -197,7 +197,7 @@ mod tests {
             .await
             .unwrap();
 
-        Storage::load(dir.path()).await.unwrap();
+        DiskStorage::load(dir.path()).await.unwrap();
 
         assert!(!fs::try_exists(path.join("0_7.sst.tmp")).await.unwrap());
     }
@@ -220,7 +220,7 @@ mod tests {
                 count += 1;
             }
         }
-        let levels = Storage::load(&dir).await.unwrap();
+        let levels = DiskStorage::load(&dir).await.unwrap();
 
         let id = levels.id;
         let levels = levels.tables;
@@ -253,7 +253,7 @@ mod tests {
         }
         fs::write(path.join("0_9.sst.tmp"), b"junk").await.unwrap();
 
-        let storage = Storage::load(&dir).await.unwrap();
+        let storage = DiskStorage::load(&dir).await.unwrap();
         let Lookup::Found(value) = storage.get("k").await.unwrap() else {
             panic!("key must be found");
         };

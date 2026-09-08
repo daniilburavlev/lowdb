@@ -1,0 +1,7 @@
+[package]
+name = "engine"
+edition = "2024"
+version.workspace = true
+
+[dependencies]
+common = { path = "../common" }

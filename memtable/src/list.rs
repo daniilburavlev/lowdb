@@ -10,7 +10,7 @@ use Ordering::{Acquire, Relaxed, Release};
 use crate::list::node::{Node, cmp_key};
 use std::cmp::Ordering as Cmp;
 
-pub mod node;
+pub(crate) mod node;
 
 pub(crate) const MAX_HEIGHT: usize = 16;
 const BRANCHING: u64 = 4;
@@ -202,6 +202,7 @@ impl Drop for SkipList {
     }
 }
 
+/// Key-value iterator
 pub struct Iter<'a> {
     _list: &'a SkipList,
     curr: *mut Node,

@@ -17,7 +17,7 @@ use tokio::{
     task::JoinHandle,
 };
 
-use crate::{state::State, storage::Storage, wal::Wal};
+use crate::{state::State, storage::DiskStorage, wal::Wal};
 
 mod state;
 mod storage;
@@ -90,7 +90,7 @@ impl Inner {
         let wal = Wal::new(dir.as_ref()).await?;
         let restored = wal.restore().await?;
         let writer = wal.new_writer().await?;
-        let storage = Storage::load(dir.as_ref()).await?;
+        let storage = DiskStorage::load(dir.as_ref()).await?;
         let max_seq = restored.max_seq.max(storage.max_seq());
         let state = State::new(writer, restored.tables, storage)?;
         Ok(Self {
@@ -114,7 +114,7 @@ impl Inner {
         let is_full = {
             let guard = self.state.read().await;
             guard.wal.append(&key, &value).await?;
-            guard.mem_table.set(key, value);
+            guard.mem_table.put(key, value);
             guard.mem_table.is_full()
         };
         if is_full {

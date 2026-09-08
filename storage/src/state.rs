@@ -4,18 +4,22 @@ use common::DbResult;
 use memtable::MemTable;
 use wal::WalWriter;
 
-use crate::storage::Storage;
+use crate::storage::DiskStorage;
 
 #[derive(Clone)]
 pub(crate) struct State {
     pub(crate) wal: Arc<WalWriter>,
     pub(crate) mem_table: Arc<MemTable>,
     pub(crate) frozen: Vec<Arc<MemTable>>,
-    pub(crate) storage: Arc<Storage>,
+    pub(crate) storage: Arc<DiskStorage>,
 }
 
 impl State {
-    pub(crate) fn new(wal: WalWriter, frozen: Vec<MemTable>, storage: Storage) -> DbResult<Self> {
+    pub(crate) fn new(
+        wal: WalWriter,
+        frozen: Vec<MemTable>,
+        storage: DiskStorage,
+    ) -> DbResult<Self> {
         let frozen = frozen.into_iter().map(Arc::new).collect();
         let id: u64 = wal.id().parse()?;
         Ok(Self {
