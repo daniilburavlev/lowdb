@@ -3,8 +3,8 @@ use tokio::io::AsyncReadExt;
 
 use crate::{
     encode::{encode_key, put_u16, put_u64},
-    read::ReadFrom,
-    write::WriteToBuf,
+    read::FromReader,
+    write::ToBuffer,
 };
 
 #[derive(Clone, Debug)]
@@ -36,7 +36,7 @@ impl IndexedKey {
     }
 }
 
-impl WriteToBuf for IndexedKey {
+impl ToBuffer for IndexedKey {
     fn write_to_buf(&self, buf: &mut Vec<u8>) -> DbResult<()> {
         encode_key(buf, &self.key)?;
         put_u64(buf, self.block_off);
@@ -45,7 +45,7 @@ impl WriteToBuf for IndexedKey {
     }
 }
 
-impl ReadFrom for IndexedKey {
+impl FromReader for IndexedKey {
     async fn read<R>(read: &mut R) -> DbResult<Self>
     where
         R: AsyncReadExt + Unpin,

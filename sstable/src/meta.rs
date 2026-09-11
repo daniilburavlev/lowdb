@@ -10,14 +10,14 @@ use crate::{
     bloom::BloomFilter,
     footer::{FOOTER_LEN, Footer},
     index::IndexedKey,
-    read::ReadFrom,
+    read::FromReader,
 };
 
 #[derive(Clone, Debug)]
 pub struct SSTableMeta {
     pub path: PathBuf,
     pub file_size: u64,
-    pub bloom: BloomFilter,
+    pub(crate) bloom: BloomFilter,
     pub first_key: Key,
     pub last_key: Key,
     pub footer: Footer,
@@ -35,7 +35,7 @@ impl SSTableMeta {
         }
         let mut reader = BufReader::new(file);
         let footer = Self::footer(file_size, &mut reader).await?;
-        let bloom = Self::bloom(&mut reader, footer.bloom_off, footer.bloom_len as usize).await?;
+        let bloom = Self::bloom(&mut reader, footer.bloom_off).await?;
         let first_key = Self::first_key(&mut reader).await?;
 
         let index = Self::index(
@@ -80,9 +80,9 @@ impl SSTableMeta {
         Footer::read(read).await
     }
 
-    async fn bloom(read: &mut BufReader<File>, offset: u64, len: usize) -> DbResult<BloomFilter> {
+    async fn bloom(read: &mut BufReader<File>, offset: u64) -> DbResult<BloomFilter> {
         read.seek(SeekFrom::Start(offset)).await?;
-        BloomFilter::read(read, len).await
+        BloomFilter::read(read).await
     }
 
     async fn index(

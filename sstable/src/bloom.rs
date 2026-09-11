@@ -1,22 +1,14 @@
 use common::DbResult;
 use tokio::io::AsyncReadExt;
 
-use crate::write::WriteTo;
+use crate::{read::FromReader, write::ToWriter};
 
+// Disk layout: [len:u32, data: bytes];
 #[derive(Clone, Debug)]
-pub struct BloomFilter(Vec<u8>);
+pub(crate) struct BloomFilter(Vec<u8>);
 
 impl BloomFilter {
-    pub async fn read<R>(read: &mut R, len: usize) -> DbResult<Self>
-    where
-        R: AsyncReadExt + Unpin,
-    {
-        let mut bloom = vec![0u8; len];
-        read.read_exact(&mut bloom).await?;
-        Ok(Self(bloom))
-    }
-
-    pub fn build(hashes: &[u64], bits_per_key: usize) -> Self {
+    pub(crate) fn build(hashes: &[u64], bits_per_key: usize) -> Self {
         let k = ((bits_per_key as f64 * 0.69) as u32).clamp(1, 30);
         let nbytes = (hashes.len() * bits_per_key).max(64).div_ceil(8);
         let nbits = (nbytes * 8) as u64;
@@ -54,11 +46,6 @@ impl BloomFilter {
         true
     }
 
-    #[allow(dead_code)]
-    pub fn as_bytes(&self) -> &[u8] {
-        &self.0
-    }
-
     pub(crate) fn hash64(key: &str) -> u64 {
         let mut h: u64 = 0xcbf2_9ce4_8422_2325;
         let b = key.as_bytes();
@@ -70,15 +57,28 @@ impl BloomFilter {
     }
 
     pub(crate) fn disk_size(&self) -> usize {
-        self.0.len()
+        4 + self.0.len()
     }
 }
 
-impl WriteTo for BloomFilter {
+impl FromReader for BloomFilter {
+    async fn read<R>(read: &mut R) -> DbResult<Self>
+    where
+        R: AsyncReadExt + Unpin,
+    {
+        let len: usize = read.read_u32().await?.try_into()?;
+        let mut bloom = vec![0u8; len];
+        read.read_exact(&mut bloom).await?;
+        Ok(Self(bloom))
+    }
+}
+
+impl ToWriter for BloomFilter {
     async fn write<W>(&self, w: &mut W) -> DbResult<()>
     where
         W: tokio::io::AsyncWriteExt + Unpin,
     {
+        w.write_u32(self.0.len().try_into()?).await?;
         w.write_all(&self.0).await?;
         Ok(())
     }

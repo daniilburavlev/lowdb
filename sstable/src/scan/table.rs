@@ -9,7 +9,7 @@ use tokio::{
 use crate::{
     BLOCK_HEADER,
     footer::{FOOTER_LEN, Footer},
-    read::ReadFrom,
+    read::FromReader,
 };
 
 pub struct TableScan {

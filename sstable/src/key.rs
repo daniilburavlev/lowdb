@@ -2,11 +2,11 @@ use common::key::Key;
 
 use crate::{
     encode::{put_u16, put_u64},
-    read::ReadFrom,
-    write::WriteToBuf,
+    read::FromReader,
+    write::ToBuffer,
 };
 
-impl ReadFrom for Key {
+impl FromReader for Key {
     async fn read<R>(r: &mut R) -> common::DbResult<Self>
     where
         R: tokio::io::AsyncReadExt + Unpin,
@@ -20,7 +20,7 @@ impl ReadFrom for Key {
     }
 }
 
-impl WriteToBuf for Key {
+impl ToBuffer for Key {
     fn write_to_buf(&self, buf: &mut Vec<u8>) -> common::DbResult<()> {
         let len: u16 = self.0.len().try_into()?;
         put_u16(buf, len);

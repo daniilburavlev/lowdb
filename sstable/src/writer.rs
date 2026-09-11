@@ -13,9 +13,10 @@ use crate::{
     footer::{FOOTER_LEN, Footer, MAGIC},
     index::IndexedKey,
     meta::SSTableMeta,
-    write::{WriteTo, WriteToBuf},
+    write::{ToBuffer, ToWriter},
 };
 
+// Maximum block size
 const BLOCK_SIZE: usize = 4 * 1024;
 const BITS_PER_KEY: usize = 10;
 const WRITE_BUF: usize = 1024 * 1024;
@@ -71,6 +72,7 @@ impl SSTableWriter {
         })
     }
 
+    // Add new key-value, key should be greater than last added
     pub async fn add(&mut self, key: &Key, value: &Value) -> DbResult<()> {
         if let Some(last) = &self.last_key
             && last > key
@@ -156,7 +158,6 @@ impl SSTableWriter {
         let footer = Footer {
             entries: self.entries,
             bloom_off,
-            bloom_len: bloom.disk_size() as u32,
             index_off,
             index_len,
             index_count: self.index.len() as u32,
@@ -203,7 +204,7 @@ mod tests {
     use tempfile::NamedTempFile;
     use tokio::io::{AsyncReadExt, AsyncSeekExt, BufReader};
 
-    use crate::read::ReadFrom;
+    use crate::read::FromReader;
 
     use super::*;
 
@@ -249,15 +250,13 @@ mod tests {
         let footer = Footer::read(&mut r).await.unwrap();
         assert_eq!(10, footer.entries);
         assert_eq!(151, footer.bloom_off);
-        assert_eq!(14, footer.bloom_len);
-        assert_eq!(165, footer.index_off);
+        assert_eq!(169, footer.index_off);
         assert_eq!(21, footer.index_len);
         assert_eq!(1, footer.index_count);
         assert_eq!(MAGIC, footer.magic);
 
         r.seek(SeekFrom::Start(footer.bloom_off)).await.unwrap();
-        let mut bloom = vec![0u8; footer.bloom_len as usize];
-        r.read_exact(&mut bloom).await.unwrap();
+        BloomFilter::read(&mut r).await.unwrap();
 
         for _ in 0..footer.index_count {
             IndexedKey::read(&mut r).await.unwrap();

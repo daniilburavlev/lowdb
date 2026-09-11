@@ -14,6 +14,7 @@ pub struct BlockHandle {
     pub len: u32,
 }
 
+// Layout
 #[derive(Debug)]
 pub struct SSTable {
     file: Arc<File>,

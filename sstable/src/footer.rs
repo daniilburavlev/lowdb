@@ -3,18 +3,17 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::{
     encode::{put_u32, put_u64},
-    read::ReadFrom,
-    write::WriteTo,
+    read::FromReader,
+    write::ToWriter,
 };
 
-pub(crate) const FOOTER_LEN: usize = 8 + 8 + 4 + 8 + 4 + 4 + 8 + 8 + 4;
+pub(crate) const FOOTER_LEN: usize = 8 + 8 + 8 + 4 + 4 + 8 + 8 + 4;
 pub(crate) const MAGIC: u32 = 0x5354_424C;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Footer {
     pub(crate) entries: u64,
     pub(crate) bloom_off: u64,
-    pub(crate) bloom_len: u32,
     pub(crate) index_off: u64,
     pub(crate) index_len: u32,
     pub(crate) index_count: u32,
@@ -27,7 +26,6 @@ impl Footer {
     pub fn write_to_buf(&self, buffer: &mut Vec<u8>) {
         put_u64(buffer, self.entries);
         put_u64(buffer, self.bloom_off);
-        put_u32(buffer, self.bloom_len);
         put_u64(buffer, self.index_off);
         put_u32(buffer, self.index_len);
         put_u32(buffer, self.index_count);
@@ -37,14 +35,13 @@ impl Footer {
     }
 }
 
-impl WriteTo for Footer {
+impl ToWriter for Footer {
     async fn write<W>(&self, w: &mut W) -> DbResult<()>
     where
         W: AsyncWriteExt + Unpin,
     {
         w.write_u64(self.entries).await?;
         w.write_u64(self.bloom_off).await?;
-        w.write_u32(self.bloom_len).await?;
         w.write_u64(self.index_off).await?;
         w.write_u32(self.index_len).await?;
         w.write_u32(self.index_count).await?;
@@ -63,14 +60,13 @@ impl From<Footer> for Vec<u8> {
     }
 }
 
-impl ReadFrom for Footer {
+impl FromReader for Footer {
     async fn read<R>(r: &mut R) -> DbResult<Self>
     where
         R: AsyncReadExt + Unpin,
     {
         let entries = r.read_u64().await?;
         let bloom_off = r.read_u64().await?;
-        let bloom_len = r.read_u32().await?;
         let index_off = r.read_u64().await?;
         let index_len = r.read_u32().await?;
         let index_count = r.read_u32().await?;
@@ -85,7 +81,6 @@ impl ReadFrom for Footer {
         Ok(Self {
             entries,
             bloom_off,
-            bloom_len,
             index_off,
             index_len,
             index_count,
@@ -109,7 +104,6 @@ mod tests {
         let footer = Footer {
             entries: 1,
             bloom_off: 1,
-            bloom_len: 1,
             index_off: 1234,
             index_len: 1000000,
             index_count: 100,

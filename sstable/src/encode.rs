@@ -1,7 +1,7 @@
 use common::{DbResult, key::Key, value::Value};
 use tokio::io::AsyncReadExt;
 
-use crate::read::ReadFrom;
+use crate::read::FromReader;
 
 pub(crate) fn set_u16(b: &mut [u8], offset: usize, v: u16) {
     b[offset..offset + 2].copy_from_slice(&v.to_be_bytes());
@@ -49,7 +49,7 @@ pub(crate) fn encode(buf: &mut Vec<u8>, key: &Key, value: &Value) -> DbResult<()
     Ok(())
 }
 
-impl ReadFrom for Value {
+impl FromReader for Value {
     async fn read<R>(r: &mut R) -> DbResult<Value>
     where
         R: AsyncReadExt + Unpin,

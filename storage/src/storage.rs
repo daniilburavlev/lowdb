@@ -114,6 +114,10 @@ impl DiskStorage {
     }
 
     pub(crate) async fn get(&self, key: &str) -> DbResult<Lookup> {
+        self.get_seq(key, u64::MAX).await
+    }
+
+    pub(crate) async fn get_seq(&self, key: &str, seq: u64) -> DbResult<Lookup> {
         let mut levels: Vec<u32> = self.tables.iter().map(|e| *e.key()).collect();
         levels.sort_unstable();
 
@@ -121,9 +125,8 @@ impl DiskStorage {
             let Some(tables) = self.tables.get(&level).map(|e| e.value().clone()) else {
                 continue;
             };
-
             for table in tables.search() {
-                match table.get(key, u64::MAX).await? {
+                match table.get(key, seq).await? {
                     Lookup::Absent => {}
                     lookup => return Ok(lookup),
                 }
