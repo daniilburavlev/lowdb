@@ -5,3 +5,13 @@ version.workspace = true
 
 [dependencies]
 common = { path = "../common" }
+chrono.workspace = true
+dashmap.workspace = true
+memtable = { path = "../memtable" }
+sstable = { path = "../sstable" }
+tokio.workspace = true
+tracing.workspace = true
+wal = { path = "../wal" }
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -1,11 +1,5 @@
 #[deny(unreachable_pub)]
 #[warn(missing_docs)]
-use std::path::PathBuf;
-
-use common::{DbResult, key::Key, value::Value};
-
-use crate::{meta::SSTableMeta, writer::SSTableWriter};
-
 pub(crate) mod bloom;
 pub(crate) mod cursor;
 pub(crate) mod encode;
@@ -21,25 +15,13 @@ pub mod writer;
 
 pub(crate) const BLOCK_HEADER: usize = 4 + 2;
 
-pub async fn build_from_iter<I>(path: impl Into<PathBuf>, iter: I) -> DbResult<Option<SSTableMeta>>
-where
-    I: IntoIterator<Item = (Key, Value)>,
-{
-    let mut w = SSTableWriter::create(path).await?;
-    for (k, v) in iter {
-        w.add(&k, &v).await?;
-    }
-    w.finish().await
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
 
-    use crate::scan::table::TableScan;
+    use crate::{scan::table::TableScan, writer::SSTableWriter};
+    use common::{key::Key, value::Value};
     use tempfile::NamedTempFile;
-
-    use super::*;
 
     #[tokio::test]
     async fn table_scan() {
