@@ -1,7 +1,7 @@
 #![deny(unreachable_pub)]
 #![warn(missing_docs)]
 
-//! Contains common types, errors, functions for usage in other crates
+//! Common types, errors, functions used in other crates
 
 use crate::error::DbError;
 
@@ -10,5 +10,5 @@ pub mod key;
 pub mod lookup;
 pub mod value;
 
-/// Main database result type used in all other crates
+/// Result wrapper returned by all funcation
 pub type DbResult<T> = Result<T, DbError>;

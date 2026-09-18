@@ -17,11 +17,12 @@ use crate::{OP_CMD, TX_BEGIN_CMD, TX_COMMIT_CMD, WalCmd, wal_id};
 /// # Example
 /// ```rust
 /// use wal::WalReader;
+/// use wal::WalCmd;
 ///
 /// #[tokio::main]
 /// async fn main() {
-///     let mut reader = WalReader::open(".example").await.unwrap();
-///     if let Some((k, v)) = reader.next().await.unwrap() {
+///     let mut reader = WalReader::open(".example_read").await.unwrap();
+///     if let Some(WalCmd::Op(k, v)) = reader.next().await.unwrap() {
 ///         println!("key: {:?} value: {:?}", k, v);
 ///     }
 /// }

@@ -16,12 +16,14 @@ use crate::{OP_CMD, TX_BEGIN_CMD, TX_COMMIT_CMD, WalCmd, wal_id};
 /// # Example
 /// ```rust
 /// use wal::WalWriter;
+/// use wal::WalCmd;
 /// use common::{key::Key, value::Value};
 ///
 /// #[tokio::main]
 /// async fn main() {
-///     let mut writer = WalWriter::open(".example").await.unwrap();
-///     writer.append(&Key::new("key", 1), &Value::Delete).await.unwrap();
+///     let mut writer = WalWriter::open(".example_write").await.unwrap();
+///     writer.append_kv(&Key::new("key", 1), &Value::Delete).await.unwrap();
+///     writer.append(WalCmd::TxBegin(100)).await.unwrap();
 /// }
 /// ```
 pub struct WalWriter {
