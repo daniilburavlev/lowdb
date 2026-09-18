@@ -111,12 +111,12 @@ name = "engine"
 version = "0.0.1"
 dependencies = [
  "common",
- "memtable",
  "sstable",
  "storage",
  "tempfile",
  "tokio",
  "tracing",
+ "transaction",
  "wal",
 ]
 

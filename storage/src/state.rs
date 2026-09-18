@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use common::{DbResult, lookup::Lookup};
 use memtable::MemTable;
-use wal::WalWriter;
+use wal::{WalCmd, WalWriter};
 
 use crate::storage::DiskStorage;
 
@@ -34,12 +34,12 @@ impl State {
 
     /// Write transaction begining in WAL file
     pub async fn begin(&self, tx_id: u64) -> DbResult<()> {
-        self.wal.begin(tx_id).await
+        self.wal.append(WalCmd::TxBegin(tx_id)).await
     }
 
     /// Write transaction commit in WAL file
     pub async fn commit(&self, tx_id: u64) -> DbResult<()> {
-        self.wal.commit(tx_id).await
+        self.wal.append(WalCmd::TxCommit(tx_id)).await
     }
 
     /// Get snapshot value by key, version is less or equal given seq

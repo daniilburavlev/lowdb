@@ -7,7 +7,7 @@ use std::{
 use common::DbResult;
 use memtable::MemTable;
 use tokio::fs;
-use wal::{WalReader, WalWriter};
+use wal::{WalCmd, WalReader, WalWriter};
 
 const WAL_DIR: &str = "wal";
 
@@ -101,7 +101,7 @@ async fn restore_tables(mut wals: Vec<WalReader>) -> DbResult<Restored> {
 
     for wal in wals.iter_mut() {
         let table = MemTable::new(wal.id().parse::<u64>()?);
-        while let Some((key, value)) = wal.next().await? {
+        while let Some(WalCmd::Op(key, value)) = wal.next().await? {
             max_seq = max_seq.max(key.1);
             table.put(key, value);
         }
@@ -128,7 +128,7 @@ mod tests {
             for j in 0..100 {
                 let key = Key(format!("{}", i * j), i * j);
                 let value = Value::Set(format!("{}", i * j));
-                writer.append(&key, &value).await.unwrap();
+                writer.append_kv(&key, &value).await.unwrap();
             }
         }
         let wal = Wal::new(&dir.path()).await.unwrap();
@@ -150,7 +150,7 @@ mod tests {
             let writer = WalWriter::open(path.join(format!("{}", id))).await.unwrap();
             let key = Key::new("k", id + 1);
             writer
-                .append(&key, &Value::set(&format!("v{id}")))
+                .append_kv(&key, &Value::set(&format!("v{id}")))
                 .await
                 .unwrap();
         }

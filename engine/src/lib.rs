@@ -12,6 +12,7 @@ use std::{
 use common::{DbResult, key::Key, value::Value};
 use storage::{Storage, flush_loop, storage::DiskStorage, wal::Wal};
 use tokio::{sync::Mutex, task::JoinHandle};
+use transaction::{Transaction, locks::Lock};
 
 /// DB instance type with the concurrent access to creation/deletion
 #[derive(Clone)]
@@ -19,6 +20,7 @@ pub struct DB {
     seq: Arc<AtomicU64>,
     inner: Arc<Storage>,
     flusher: Arc<Mutex<Option<JoinHandle<()>>>>,
+    lock: Lock,
 }
 
 impl DB {
@@ -27,14 +29,24 @@ impl DB {
         let wal = Wal::new(dir.as_ref()).await?;
         let storage = DiskStorage::load(dir.as_ref()).await?;
         let restored = wal.restore().await?;
+        let max_seq = storage.max_seq().max(restored.max_seq);
         let inner = Arc::new(Storage::new(wal, storage, restored.tables).await?);
         let flusher = tokio::spawn(flush_loop(Arc::downgrade(&inner)));
         inner.flush_notify_one();
         Ok(Self {
-            seq: Arc::new(AtomicU64::new(restored.max_seq + 1)),
+            seq: Arc::new(AtomicU64::new(max_seq + 1)),
             inner,
             flusher: Arc::new(Mutex::new(Some(flusher))),
+            lock: Lock::default(),
         })
+    }
+
+    /// Create new transaction
+    pub async fn transaction(&self) -> Transaction {
+        let seq = Arc::clone(&self.seq);
+        let storage = Arc::clone(&self.inner);
+        let lock = self.lock.clone();
+        Transaction::new(seq, storage, lock).await
     }
 
     /// Insert/update new key-value pair
@@ -138,6 +150,7 @@ mod tests {
     async fn reopen_resumes_the_sequence_above_the_flushed_tables() {
         let dir = tempdir().unwrap();
         let db = DB::open(dir.path()).await.unwrap();
+
         db.set("k", "first").await.unwrap();
         db.close().await.unwrap();
 
@@ -165,7 +178,7 @@ mod tests {
         let wal = WalWriter::open(dir.path().join("wal").join("1"))
             .await
             .unwrap();
-        wal.append(&Key::new("k", 1), &Value::set("value"))
+        wal.append_kv(&Key::new("k", 1), &Value::set("value"))
             .await
             .unwrap();
         drop(wal);

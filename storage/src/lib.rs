@@ -80,7 +80,7 @@ impl Storage {
     pub async fn set(&self, key: Key, value: Value) -> DbResult<()> {
         let is_full = {
             let guard = self.state.read().await;
-            guard.wal.append(&key, &value).await?;
+            guard.wal.append_kv(&key, &value).await?;
             guard.mem_table.put(key, value);
             guard.mem_table.is_full()
         };
@@ -242,6 +242,8 @@ mod tests {
     #[tokio::test]
     async fn background_flusher_drains_frozen_memtables() {
         let (dir, storage) = create_storage().await;
+        let storage = Arc::new(storage);
+        tokio::spawn(flush_loop(Arc::downgrade(&storage)));
 
         for i in 0..3 {
             let key = Key(format!("k{i}"), i);

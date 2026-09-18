@@ -5,9 +5,9 @@ version.workspace = true
 
 [dependencies]
 common = { path = "../common" }
-memtable = { path = "../memtable" }
 sstable = { path = "../sstable" }
 storage = { path = "../storage" }
+transaction = { path = "../transaction" }
 tokio.workspace = true
 tracing.workspace = true
 wal = { path = "../wal" }

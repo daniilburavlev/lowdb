@@ -24,6 +24,10 @@ impl Transaction {
     pub async fn new(seq: Arc<AtomicU64>, storage: Arc<Storage>, lock: Lock) -> Self {
         let id = seq.fetch_add(1, Relaxed);
         let state = storage.snapshot().await;
+        {
+            let mut lock = lock.lock().await;
+            lock.add_tx(id);
+        }
         Self {
             id,
             seq,
@@ -52,7 +56,7 @@ impl Transaction {
     pub async fn commit(&self) -> DbResult<()> {
         let mut lock = self.lock.lock().await;
         for (k, _) in self.buffer.iter() {
-            if lock.last_seq(&k.0).is_some_and(|seq| seq > k.1) {
+            if lock.last_id(&k.0).is_some_and(|id| id != self.id) {
                 return Err(DbError::CommitConflict);
             }
         }
@@ -61,8 +65,9 @@ impl Transaction {
             self.storage.set(k.clone(), v.clone()).await?;
         }
         for (k, _) in self.buffer.iter() {
-            lock.update(k.0.clone(), k.1);
+            lock.update(k.0.clone(), self.id);
         }
+        lock.remove_tx(self.id);
         self.storage.commit(self.id).await?;
         Ok(())
     }
@@ -70,6 +75,8 @@ impl Transaction {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
 
     #[tokio::test]
@@ -91,5 +98,38 @@ mod tests {
         storage.set(key2, value2).await.unwrap();
 
         assert_eq!(tx.get("k1").await.unwrap(), Some("v1".to_string()));
+    }
+
+    #[tokio::test]
+    async fn concurrent_txs() {
+        let (_dir, storage) = storage::testing::create_storage().await;
+        let storage = Arc::new(storage);
+
+        let seq = Arc::new(AtomicU64::new(1));
+        let storage = Arc::clone(&storage);
+        let lock = Lock::default();
+
+        let tx = Transaction::new(Arc::clone(&seq), Arc::clone(&storage), lock.clone()).await;
+        {
+            let lock = lock.lock().await;
+            assert!(lock.0.txs.contains(&1));
+        }
+
+        let tx2 = Transaction::new(seq, storage, lock.clone()).await;
+        {
+            let lock = lock.lock().await;
+            assert!(lock.0.txs.contains(&2));
+        }
+        let tx1 = tokio::spawn(async move {
+            tx.set("k1", "v2").await.unwrap();
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            tx.commit().await
+        });
+        tx2.set("k1", "v1").await.unwrap();
+        tx2.commit().await.unwrap();
+
+        let Err(DbError::CommitConflict) = tx1.await.unwrap() else {
+            panic!("first tx does not rollbacked");
+        };
     }
 }
