@@ -3,7 +3,7 @@ version = "0.0.1"
 
 [workspace]
 resolver = "2"
-members = ["common", "memtable", "sstable", "wal", "engine"]
+members = ["common", "memtable", "sstable", "storage", "wal", "engine", "transaction"]
 
 [workspace.dependencies]
 crc32fast = "1.5"

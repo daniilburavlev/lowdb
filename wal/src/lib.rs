@@ -81,6 +81,16 @@ impl WalWriter {
         Ok(())
     }
 
+    /// Mark transaction started with id
+    pub async fn begin(&self, tx_id: u64) -> DbResult<()> {
+        Ok(())
+    }
+
+    /// Mark transaction committed with id
+    pub async fn commit(&self, tx_id: u64) -> DbResult<()> {
+        Ok(())
+    }
+
     /// WAL's id, used for managing existed wals
     pub fn id(&self) -> &str {
         &self.id

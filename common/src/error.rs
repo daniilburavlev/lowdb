@@ -21,6 +21,9 @@ pub enum DbError {
     /// Shows part of system is in invalid state. i.e badly written file
     #[error("{0}")]
     InvalidState(String),
+    /// Commit can't be finished, conflict accurance
+    #[error("commit conflict")]
+    CommitConflict,
 }
 
 impl DbError {

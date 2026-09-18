@@ -1,3 +1,4 @@
+//! Accessing persisted files
 use std::{
     path::{Path, PathBuf},
     sync::{
@@ -23,7 +24,8 @@ use crate::tables::SSTables;
 const TABLES_DIR: &str = "ss";
 const TMP_EXT: &str = "tmp";
 
-pub(crate) struct DiskStorage {
+/// Structure for accessing files on disk
+pub struct DiskStorage {
     dir: PathBuf,
     id: AtomicU64,
     max_seq: u64,
@@ -32,7 +34,8 @@ pub(crate) struct DiskStorage {
 }
 
 impl DiskStorage {
-    pub(crate) async fn load<P: AsRef<Path>>(dir: P) -> DbResult<Self> {
+    /// Load files from `${dir}/ss` dir
+    pub async fn load<P: AsRef<Path>>(dir: P) -> DbResult<Self> {
         let dir = dir.as_ref().join(TABLES_DIR);
         fs::create_dir_all(&dir).await?;
         let mut read_dir = fs::read_dir(&dir).await?;
@@ -76,11 +79,13 @@ impl DiskStorage {
         })
     }
 
-    pub(crate) fn max_seq(&self) -> u64 {
+    /// Get latest persisted sequence
+    pub fn max_seq(&self) -> u64 {
         self.max_seq
     }
 
-    pub(crate) async fn l0(&self, mt: &MemTable) -> DbResult<bool> {
+    /// Persist memtable to level 0 SSTable
+    pub async fn l0(&self, mt: &MemTable) -> DbResult<bool> {
         let _guard = self.lock.lock().await;
         let id = self.id.fetch_add(1, Relaxed);
         let path = self.dir.join(format!("0_{}", id));
@@ -113,11 +118,13 @@ impl DiskStorage {
         Ok(true)
     }
 
-    pub(crate) async fn get(&self, key: &str) -> DbResult<Lookup> {
-        self.get_seq(key, u64::MAX).await
+    /// Search value by key
+    pub async fn get(&self, key: &str) -> DbResult<Lookup> {
+        self.get_snap(key, u64::MAX).await
     }
 
-    pub(crate) async fn get_seq(&self, key: &str, seq: u64) -> DbResult<Lookup> {
+    /// Search value by key where given seq is greater or equal
+    pub async fn get_snap(&self, key: &str, seq: u64) -> DbResult<Lookup> {
         let mut levels: Vec<u32> = self.tables.iter().map(|e| *e.key()).collect();
         levels.sort_unstable();
 

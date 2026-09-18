@@ -1,17 +1,21 @@
 [package]
-name = "engine"
+name = "storage"
 edition = "2024"
 version.workspace = true
 
+[features]
+testing = ["dep:tempfile"]
+
 [dependencies]
 common = { path = "../common" }
+chrono.workspace = true
+dashmap.workspace = true
 memtable = { path = "../memtable" }
 sstable = { path = "../sstable" }
-storage = { path = "../storage" }
 tokio.workspace = true
 tracing.workspace = true
 wal = { path = "../wal" }
+tempfile = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true
-storage = { path = "../storage", features = ["testing"] }

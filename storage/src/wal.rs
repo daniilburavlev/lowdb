@@ -1,3 +1,4 @@
+//! Wal wrapper, allowing to restore state after fall, generate new sequenced writer
 use std::{
     path::{Path, PathBuf},
     sync::atomic::AtomicU64,
@@ -10,18 +11,23 @@ use wal::{WalReader, WalWriter};
 
 const WAL_DIR: &str = "wal";
 
-pub(crate) struct Restored {
-    pub(crate) tables: Vec<MemTable>,
-    pub(crate) max_seq: u64,
+/// Restored state
+pub struct Restored {
+    /// Restored memory tables
+    pub tables: Vec<MemTable>,
+    /// Latest sequence found in WAL
+    pub max_seq: u64,
 }
 
-pub(crate) struct Wal {
+/// Main WAL manager
+pub struct Wal {
     path: PathBuf,
     id: AtomicU64,
 }
 
 impl Wal {
-    pub(crate) async fn new(dir: impl Into<PathBuf>) -> DbResult<Self> {
+    /// Create or open given '${dir}/wal' path to existign WAL files, get latest sequence number
+    pub async fn new(dir: impl Into<PathBuf>) -> DbResult<Self> {
         let path = dir.into();
         let path = path.join(WAL_DIR);
         fs::create_dir_all(&path).await?;
@@ -32,19 +38,22 @@ impl Wal {
         })
     }
 
-    pub(crate) async fn restore(&self) -> DbResult<Restored> {
+    /// Restore all memtables
+    pub async fn restore(&self) -> DbResult<Restored> {
         let wals = load_wals(&self.path).await?;
         restore_tables(wals).await
     }
 
-    pub(crate) async fn new_writer(&self) -> DbResult<WalWriter> {
+    /// Create new WAL file, returns writer
+    pub async fn new_writer(&self) -> DbResult<WalWriter> {
         let id = self.id.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let path = self.path.join(format!("{}", id));
         let writer = WalWriter::open(&path).await?;
         Ok(writer)
     }
 
-    pub(crate) async fn remove(&self, id: u64) -> DbResult<()> {
+    /// Remove WAL file by id
+    pub async fn remove(&self, id: u64) -> DbResult<()> {
         match fs::remove_file(self.path.join(format!("{}", id))).await {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),

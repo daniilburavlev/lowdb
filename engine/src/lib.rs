@@ -4,48 +4,34 @@
 use std::{
     path::Path,
     sync::{
-        Arc, Weak,
-        atomic::{
-            AtomicBool, AtomicU64,
-            Ordering::{Acquire, Release},
-        },
+        Arc,
+        atomic::{AtomicU64, Ordering::Relaxed},
     },
-    time::Duration,
 };
 
-use common::{DbResult, key::Key, lookup::Lookup, value::Value};
-use memtable::MemTable;
-use tokio::{
-    sync::{Mutex, MutexGuard, Notify, RwLock},
-    task::JoinHandle,
-};
-
-use crate::{state::State, storage::DiskStorage, wal::Wal};
-
-mod state;
-mod storage;
-mod tables;
-mod wal;
-
-const MAX_FROZEN: usize = 4;
-const BACKPRESSURE_POLL: Duration = Duration::from_millis(50);
-const RETRY_MIN: Duration = Duration::from_millis(50);
-const RETRY_MAX: Duration = Duration::from_secs(5);
+use common::{DbResult, key::Key, value::Value};
+use storage::{Storage, flush_loop, storage::DiskStorage, wal::Wal};
+use tokio::{sync::Mutex, task::JoinHandle};
 
 /// DB instance type with the concurrent access to creation/deletion
 #[derive(Clone)]
 pub struct DB {
-    inner: Arc<Inner>,
+    seq: Arc<AtomicU64>,
+    inner: Arc<Storage>,
     flusher: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
 
 impl DB {
     /// Open database with default options
     pub async fn open<P: AsRef<Path>>(dir: P) -> DbResult<Self> {
-        let inner = Arc::new(Inner::open(dir).await?);
+        let wal = Wal::new(dir.as_ref()).await?;
+        let storage = DiskStorage::load(dir.as_ref()).await?;
+        let restored = wal.restore().await?;
+        let inner = Arc::new(Storage::new(wal, storage, restored.tables).await?);
         let flusher = tokio::spawn(flush_loop(Arc::downgrade(&inner)));
-        inner.flush_notify.notify_one();
+        inner.flush_notify_one();
         Ok(Self {
+            seq: Arc::new(AtomicU64::new(restored.max_seq + 1)),
             inner,
             flusher: Arc::new(Mutex::new(Some(flusher))),
         })
@@ -53,6 +39,9 @@ impl DB {
 
     /// Insert/update new key-value pair
     pub async fn set(&self, key: &str, value: &str) -> DbResult<()> {
+        let seq = self.seq.fetch_add(1, Relaxed);
+        let key = Key::new(key, seq);
+        let value = Value::set(value);
         self.inner.set(key, value).await
     }
 
@@ -83,207 +72,17 @@ impl Drop for DB {
     }
 }
 
-struct Inner {
-    seq: AtomicU64,
-    state: RwLock<Arc<State>>,
-    state_lock: Mutex<()>,
-    flush_lock: Mutex<()>,
-    flush_notify: Notify,
-    flushed_notify: Notify,
-    shutdown: AtomicBool,
-    shutdown_notify: Notify,
-    wal: Wal,
-}
-
-impl Inner {
-    async fn open<P: AsRef<Path>>(dir: P) -> DbResult<Self> {
-        let wal = Wal::new(dir.as_ref()).await?;
-        let restored = wal.restore().await?;
-        let writer = wal.new_writer().await?;
-        let storage = DiskStorage::load(dir.as_ref()).await?;
-        let max_seq = restored.max_seq.max(storage.max_seq());
-        let state = State::new(writer, restored.tables, storage)?;
-        Ok(Self {
-            seq: AtomicU64::new(max_seq + 1),
-            state: RwLock::new(Arc::new(state)),
-            state_lock: Mutex::new(()),
-            flush_lock: Mutex::new(()),
-            flush_notify: Notify::default(),
-            flushed_notify: Notify::default(),
-            shutdown: AtomicBool::new(false),
-            shutdown_notify: Notify::default(),
-            wal,
-        })
-    }
-
-    async fn set(&self, key: &str, value: &str) -> DbResult<()> {
-        let seq = self.seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let key = Key::new(key, seq);
-        let value = Value::set(value);
-
-        let is_full = {
-            let guard = self.state.read().await;
-            guard.wal.append(&key, &value).await?;
-            guard.mem_table.put(key, value);
-            guard.mem_table.is_full()
-        };
-        if is_full {
-            self.try_freeze().await?;
-            self.await_flush_capacity().await;
-        }
-        Ok(())
-    }
-
-    async fn get(&self, key: &str) -> DbResult<Option<String>> {
-        let snapshot = self.state.read().await.clone();
-        match snapshot.mem_table.get(key) {
-            Lookup::Found(value) => return Ok(Some(value)),
-            Lookup::Deleted => return Ok(None),
-            _ => {}
-        }
-        for mt in &snapshot.frozen {
-            match mt.get(key) {
-                Lookup::Found(value) => return Ok(Some(value)),
-                Lookup::Deleted => return Ok(None),
-                _ => {}
-            }
-        }
-        match snapshot.storage.get(key).await? {
-            Lookup::Found(value) => Ok(Some(value)),
-            _ => Ok(None),
-        }
-    }
-
-    async fn flush_all(&self) -> DbResult<()> {
-        {
-            let guard = self.state_lock.lock().await;
-            if !self.state.read().await.mem_table.is_empty() {
-                self.force_freeze(&guard).await?;
-            }
-        }
-        while self.flush_oldest().await? {}
-        Ok(())
-    }
-
-    async fn flush_oldest(&self) -> DbResult<bool> {
-        let _guard = self.flush_lock.lock().await;
-
-        let (mt, storage) = {
-            let state = self.state.read().await;
-            let Some(mt) = state.frozen.last().cloned() else {
-                return Ok(false);
-            };
-            (mt, state.storage.clone())
-        };
-
-        storage.l0(&mt).await?;
-        self.retire(&mt).await;
-        self.wal.remove(mt.id()).await?;
-
-        self.flush_notify.notify_waiters();
-        Ok(true)
-    }
-
-    async fn retire(&self, mt: &Arc<MemTable>) {
-        let _guard = self.state_lock.lock().await;
-        let mut guard = self.state.write().await;
-        let mut snapshot = guard.as_ref().clone();
-
-        snapshot.frozen.retain(|frozen| !Arc::ptr_eq(frozen, mt));
-        *guard = Arc::new(snapshot);
-    }
-
-    async fn await_flush_capacity(&self) {
-        loop {
-            if self.state.read().await.frozen.len() <= MAX_FROZEN {
-                return;
-            }
-            self.flush_notify.notify_one();
-            let _ = tokio::time::timeout(BACKPRESSURE_POLL, self.flushed_notify.notified()).await;
-        }
-    }
-
-    fn is_shutdown(&self) -> bool {
-        self.shutdown.load(Acquire)
-    }
-
-    fn begin_shutdown(&self) {
-        self.shutdown.store(true, Release);
-        self.shutdown_notify.notify_one();
-    }
-
-    async fn try_freeze(&self) -> DbResult<()> {
-        let guard = self.state_lock.lock().await;
-        let still_full = {
-            let s = self.state.read().await;
-            s.mem_table.is_full()
-        };
-        if !still_full {
-            return Ok(());
-        }
-        self.force_freeze(&guard).await
-    }
-
-    async fn force_freeze(&self, _g: &MutexGuard<'_, ()>) -> DbResult<()> {
-        let new_wal = Arc::new(self.wal.new_writer().await?);
-        let id: u64 = new_wal.id().parse()?;
-        let new_mt = Arc::new(MemTable::new(id));
-        {
-            let mut guard = self.state.write().await;
-            let mut snapshot = guard.as_ref().clone();
-
-            let _ = std::mem::replace(&mut snapshot.wal, new_wal);
-            let old = std::mem::replace(&mut snapshot.mem_table, new_mt);
-
-            snapshot.frozen.insert(0, old);
-            *guard = Arc::new(snapshot);
-        }
-        self.flush_notify.notify_one();
-        Ok(())
-    }
-}
-
-async fn flush_loop(inner: Weak<Inner>) {
-    let mut retry = RETRY_MIN;
-    loop {
-        let Some(inner) = inner.upgrade() else {
-            return;
-        };
-
-        match inner.flush_oldest().await {
-            Ok(true) => {
-                retry = RETRY_MIN;
-                continue;
-            }
-            Ok(false) => {}
-            Err(e) => {
-                tracing::error!("flush failed: {e}");
-                if inner.is_shutdown() {
-                    return;
-                }
-                tokio::time::sleep(retry).await;
-                retry = (retry * 2).min(RETRY_MAX);
-                continue;
-            }
-        }
-        if inner.is_shutdown() {
-            return;
-        }
-        tokio::select! {
-            _ = inner.flush_notify.notified() => {}
-            _ = inner.shutdown_notify.notified() => {}
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
+    use std::sync::atomic::{
+        AtomicBool,
+        Ordering::{Acquire, Relaxed, Release},
+    };
 
     use ::wal::WalWriter;
     use sstable::meta::SSTableMeta;
-    use tempfile::{TempDir, tempdir};
-    use tokio::fs;
+    use storage::testing::{drain, names};
+    use tempfile::tempdir;
 
     use super::*;
 
@@ -298,35 +97,12 @@ mod tests {
         db.flush().await.unwrap();
 
         assert_eq!(names(&dir, "ss").await.len(), 1, "one table per flush");
-        assert!(db.inner.state.read().await.frozen.is_empty());
         assert_eq!(
             names(&dir, "wal").await.len(),
             1,
             "only the active log survives"
         );
 
-        for i in 0..3 {
-            assert_eq!(
-                db.get(&format!("k{i}")).await.unwrap(),
-                Some(format!("v{i}"))
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn background_flusher_drains_frozen_memtables() {
-        let dir = tempdir().unwrap();
-        let db = DB::open(dir.path()).await.unwrap();
-
-        for i in 0..3 {
-            db.set(&format!("k{i}"), &format!("v{i}")).await.unwrap();
-            let guard = db.inner.state_lock.lock().await;
-            db.inner.force_freeze(&guard).await.unwrap();
-        }
-        drain(&db).await;
-
-        assert_eq!(names(&dir, "ss").await.len(), 3);
-        assert_eq!(names(&dir, "wal").await.len(), 1);
         for i in 0..3 {
             assert_eq!(
                 db.get(&format!("k{i}")).await.unwrap(),
@@ -367,7 +143,7 @@ mod tests {
 
         let db = DB::open(dir.path()).await.unwrap();
         assert_eq!(
-            db.inner.seq.load(Relaxed),
+            db.seq.load(Relaxed),
             2,
             "next sequence must clear the largest one on disk"
         );
@@ -397,7 +173,7 @@ mod tests {
 
         let db = DB::open(dir.path()).await.unwrap();
         assert_eq!(db.get("k").await.unwrap(), Some("value".to_string()));
-        drain(&db).await;
+        drain(&db.inner).await;
         assert_eq!(db.get("k").await.unwrap(), Some("value".to_string()));
     }
 
@@ -436,25 +212,5 @@ mod tests {
         }
         done.store(true, Release);
         reader.await.unwrap();
-    }
-
-    async fn drain(db: &DB) {
-        tokio::time::timeout(Duration::from_secs(10), async {
-            while !db.inner.state.read().await.frozen.is_empty() {
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
-        })
-        .await
-        .expect("flusher should drain the frozen memtables");
-    }
-
-    async fn names(dir: &TempDir, sub: &str) -> Vec<String> {
-        let mut entries = fs::read_dir(dir.path().join(sub)).await.unwrap();
-        let mut names = vec![];
-        while let Some(entry) = entries.next_entry().await.unwrap() {
-            names.push(entry.file_name().to_string_lossy().into_owned());
-        }
-        names.sort();
-        names
     }
 }

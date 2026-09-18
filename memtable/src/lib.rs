@@ -56,11 +56,11 @@ impl MemTable {
 
     /// Get latest stored value version by key
     pub fn get(&self, key: &str) -> Lookup {
-        self.get_seq(key, u64::MAX)
+        self.get_snap(key, u64::MAX)
     }
 
     /// Get stored value with max seq less than received
-    pub fn get_seq(&self, key: &str, seq: u64) -> Lookup {
+    pub fn get_snap(&self, key: &str, seq: u64) -> Lookup {
         match self.skip_list.get_at(key, seq).cloned() {
             Some(Value::Set(value)) => Lookup::Found(value),
             Some(Value::Delete) => Lookup::Deleted,
