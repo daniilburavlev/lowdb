@@ -132,4 +132,82 @@ mod tests {
             panic!("first tx does not rollbacked");
         };
     }
+
+    // ---- Review findings: each test asserts correct behaviour and fails today ----
+
+    /// Bug: `commit` returns early on conflict without `remove_tx`, and there is
+    /// no rollback/Drop, so aborted or abandoned txs stay in `txs` forever. Since
+    /// `remove_tx` only prunes when the committing tx is the minimum, one leaked
+    /// id blocks pruning of `recent` for the rest of the process.
+    #[tokio::test]
+    async fn aborted_and_dropped_txs_leave_active_set() {
+        let (_dir, storage) = storage::testing::create_storage().await;
+        let storage = Arc::new(storage);
+        let seq = Arc::new(AtomicU64::new(1));
+        let lock = Lock::default();
+
+        let dropped = Transaction::new(seq.clone(), storage.clone(), lock.clone()).await;
+        let dropped_id = dropped.id;
+        drop(dropped);
+
+        let t1 = Transaction::new(seq.clone(), storage.clone(), lock.clone()).await;
+        let t2 = Transaction::new(seq.clone(), storage.clone(), lock.clone()).await;
+        t1.set("k", "a").await.unwrap();
+        t2.set("k", "b").await.unwrap();
+        t1.commit().await.unwrap();
+        assert!(matches!(t2.commit().await, Err(DbError::CommitConflict)));
+
+        let guard = lock.lock().await;
+        assert!(
+            !guard.0.txs.contains(&dropped_id),
+            "dropped tx still registered as active"
+        );
+        assert!(
+            !guard.0.txs.contains(&t2.id),
+            "aborted tx still registered as active"
+        );
+    }
+
+    /// Bug: the snapshot seq is simply the next counter value, not a
+    /// "committed up to" watermark. A plain writer that allocated a lower seq
+    /// before the tx began but applies it after is visible mid-transaction.
+    /// (Simulates the interleaving `fetch_add` → tx begin → `Storage::set`.)
+    #[tokio::test]
+    async fn in_flight_lower_seq_write_is_not_visible_to_later_snapshot() {
+        let (_dir, storage) = storage::testing::create_storage().await;
+        let storage = Arc::new(storage);
+        let seq = Arc::new(AtomicU64::new(1));
+
+        let in_flight = seq.fetch_add(1, Relaxed); // DB::set allocated, not yet applied
+        let tx = Transaction::new(seq.clone(), storage.clone(), Lock::default()).await;
+        assert_eq!(tx.get("k").await.unwrap(), None);
+
+        storage
+            .set(Key::new("k", in_flight), Value::set("late"))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            tx.get("k").await.unwrap(),
+            None,
+            "snapshot changed after the tx began"
+        );
+    }
+
+    /// Bug: `commit(&self)` can be called again (e.g. after success), re-applying
+    /// the write set with stale seqs and re-appending TxBegin/TxCommit. After
+    /// another tx committed in between, the re-commit is not rejected.
+    #[tokio::test]
+    async fn committed_tx_cannot_commit_again() {
+        let (_dir, storage) = storage::testing::create_storage().await;
+        let storage = Arc::new(storage);
+        let seq = Arc::new(AtomicU64::new(1));
+        let lock = Lock::default();
+
+        let tx = Transaction::new(seq.clone(), storage.clone(), lock.clone()).await;
+        tx.set("k", "v").await.unwrap();
+        tx.commit().await.unwrap();
+
+        assert!(tx.commit().await.is_err(), "second commit must be rejected");
+    }
 }
