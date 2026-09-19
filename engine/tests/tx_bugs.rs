@@ -1,8 +1,3 @@
-//! Regression tests for bugs found while reviewing the transaction implementation.
-//!
-//! Every test here asserts the *correct* behaviour, so each one fails until the
-//! corresponding bug is fixed.
-
 use std::{
     sync::{
         Arc,
@@ -15,10 +10,6 @@ use common::error::DbError;
 use engine::DB;
 use tempfile::tempdir;
 
-/// Bug: `Lock::remove_tx` keeps the committing tx's own entries in `recent`
-/// forever (`retain(|_, v| *v == id)`), and `commit` treats *any* entry by
-/// another tx as a conflict, even one committed before this tx began.
-/// Two strictly sequential transactions on one key therefore always conflict.
 #[tokio::test]
 async fn sequential_transactions_on_same_key_do_not_conflict() {
     let dir = tempdir().unwrap();
@@ -38,9 +29,6 @@ async fn sequential_transactions_on_same_key_do_not_conflict() {
     assert_eq!(db.get("k").await.unwrap(), Some("v2".to_string()));
 }
 
-/// Bug: when the *oldest* active tx commits, `remove_tx` drops every `recent`
-/// entry written by other txs — including ones that still-running txs need to
-/// validate against. The conflict is then missed and an update is lost.
 #[tokio::test]
 async fn pruning_recent_on_oldest_commit_does_not_hide_conflicts() {
     let dir = tempdir().unwrap();
@@ -66,10 +54,6 @@ async fn pruning_recent_on_oldest_commit_does_not_hide_conflicts() {
     );
 }
 
-/// Bug: a transaction's snapshot is its id (a seq taken at begin), but writes
-/// of other transactions get seqs at `set` time, not at commit. A tx that
-/// began after another tx's `set` but before its `commit` sees that commit
-/// appear mid-transaction — a non-repeatable read, breaking snapshot isolation.
 #[tokio::test]
 async fn snapshot_does_not_see_writes_committed_after_it_began() {
     let dir = tempdir().unwrap();
@@ -90,9 +74,6 @@ async fn snapshot_does_not_see_writes_committed_after_it_began() {
     );
 }
 
-/// Bug: plain `DB::set` never touches the tx `Lock`, so a transaction that
-/// writes a key concurrently overwritten by a plain write commits without a
-/// conflict.
 #[tokio::test]
 async fn plain_write_to_a_tx_key_is_detected_as_conflict() {
     let dir = tempdir().unwrap();
@@ -108,9 +89,6 @@ async fn plain_write_to_a_tx_key_is_detected_as_conflict() {
     );
 }
 
-/// Bug: a tx's writes keep the seq allocated at `set`, so a plain write made
-/// between `tx.set` and `tx.commit` has a *higher* seq and shadows the
-/// committed value. `commit` returns Ok but its write is silently invisible.
 #[tokio::test]
 async fn successful_commit_is_visible() {
     let dir = tempdir().unwrap();
@@ -131,10 +109,6 @@ async fn successful_commit_is_visible() {
     }
 }
 
-/// Bug: `restore_tables` loops `while let Some(WalCmd::Op(..)) = wal.next()`,
-/// so it stops at the first `TxBegin` record. Everything after it in the WAL —
-/// the committed transaction and any later plain writes — is lost on crash
-/// recovery (and `max_seq` is under-counted, so seqs get reused).
 #[tokio::test]
 async fn committed_tx_and_later_writes_survive_crash_recovery() {
     let dir = tempdir().unwrap();
@@ -165,9 +139,6 @@ async fn committed_tx_and_later_writes_survive_crash_recovery() {
     );
 }
 
-/// Bug: `commit` applies the write set one `Storage::set` at a time (each an
-/// fsync) with no visibility barrier, so concurrent readers observe a
-/// half-applied transaction.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn commit_is_atomic_for_concurrent_readers() {
     const KEYS: usize = 50;

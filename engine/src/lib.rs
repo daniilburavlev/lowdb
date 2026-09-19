@@ -55,9 +55,6 @@ impl DB {
 
     /// Get latest committed value by key
     pub async fn get(&self, key: &str) -> DbResult<Option<String>> {
-        // Read at the published watermark, not `u64::MAX`: a commit inserts
-        // into the memtable before it becomes visible, so an unbounded read
-        // could observe a half-applied write set.
         self.inner.get_snap(key, self.oracle.read_ts()).await
     }
 
