@@ -1,75 +1,72 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicU64, Ordering::Relaxed},
-};
+use std::{collections::BTreeMap, sync::Arc};
 
-use common::{DbResult, error::DbError, key::Key, lookup::Lookup, value::Value};
-use memtable::MemTable;
+use common::{DbResult, value::Value};
 use storage::{Storage, state::State};
 
-use crate::locks::Lock;
+use crate::oracle::Oracle;
 
-pub mod locks;
+pub mod oracle;
 
 pub struct Transaction {
-    id: u64,
-    seq: Arc<AtomicU64>,
-    buffer: MemTable,
+    read_ts: u64,
+    buffer: BTreeMap<String, Value>,
+    oracle: Arc<Oracle>,
     storage: Arc<Storage>,
     state: Arc<State>,
-    lock: Lock,
+    done: bool,
 }
 
 impl Transaction {
-    pub async fn new(seq: Arc<AtomicU64>, storage: Arc<Storage>, lock: Lock) -> Self {
-        let id = seq.fetch_add(1, Relaxed);
+    pub async fn new(oracle: Arc<Oracle>, storage: Arc<Storage>) -> Self {
+        let read_ts = oracle.begin();
         let state = storage.snapshot().await;
-        {
-            let mut lock = lock.lock().await;
-            lock.add_tx(id);
-        }
         Self {
-            id,
-            seq,
-            buffer: MemTable::new(0),
-            state,
+            read_ts,
+            buffer: BTreeMap::new(),
+            oracle,
             storage,
-            lock,
+            state,
+            done: false,
         }
     }
 
-    pub async fn set(&self, key: &str, value: &str) -> DbResult<()> {
-        let seq = self.seq.fetch_add(1, Relaxed);
-        self.buffer.put(Key::new(key, seq), Value::set(value));
-        Ok(())
+    pub fn set(&mut self, key: &str, value: &str) {
+        self.buffer.insert(key.to_string(), Value::set(value));
+    }
+
+    pub fn delete(&mut self, key: &str) {
+        self.buffer.insert(key.to_string(), Value::Delete);
     }
 
     pub async fn get(&self, key: &str) -> DbResult<Option<String>> {
         match self.buffer.get(key) {
-            Lookup::Found(value) => return Ok(Some(value)),
-            Lookup::Deleted => return Ok(None),
-            Lookup::Absent => {}
+            Some(Value::Set(value)) => return Ok(Some(value.clone())),
+            Some(Value::Delete) => return Ok(None),
+            None => {}
         }
-        self.state.get_snap(key, self.id).await
+        self.state.get_snap(key, self.read_ts).await
     }
 
-    pub async fn commit(&self) -> DbResult<()> {
-        let mut lock = self.lock.lock().await;
-        for (k, _) in self.buffer.iter() {
-            if lock.last_id(&k.0).is_some_and(|id| id != self.id) {
-                return Err(DbError::CommitConflict);
-            }
+    pub async fn commit(mut self) -> DbResult<()> {
+        let buffer = std::mem::take(&mut self.buffer);
+        if buffer.is_empty() {
+            return Ok(());
         }
-        self.storage.begin(self.id).await?;
-        for (k, v) in self.buffer.iter() {
-            self.storage.set(k.clone(), v.clone()).await?;
+        self.oracle
+            .commit(&self.storage, Some(self.read_ts), buffer)
+            .await
+            .map(|_| ())
+    }
+
+    pub fn rollback(&self) {}
+}
+
+impl Drop for Transaction {
+    fn drop(&mut self) {
+        if !self.done {
+            self.done = true;
+            self.oracle.end(self.read_ts);
         }
-        for (k, _) in self.buffer.iter() {
-            lock.update(k.0.clone(), self.id);
-        }
-        lock.remove_tx(self.id);
-        self.storage.commit(self.id).await?;
-        Ok(())
     }
 }
 

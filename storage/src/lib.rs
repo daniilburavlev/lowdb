@@ -12,6 +12,7 @@ use std::{
     time::Duration,
 };
 
+use ::wal::WalCmd;
 use common::{DbResult, key::Key, value::Value};
 use memtable::MemTable;
 use tokio::sync::{Mutex, MutexGuard, Notify, RwLock};
@@ -59,6 +60,15 @@ impl Storage {
         })
     }
 
+    pub async fn apply_batch(&self, batch: Vec<(Key, Value)>) -> DbResult<()> {
+        let guard = self.state.read().await;
+        guard.wal.append_batch(&batch).await?;
+        for (k, v) in batch {
+            guard.mem_table.put(k, v);
+        }
+        Ok(())
+    }
+
     /// Flush one waiter file is notified
     pub fn flush_notify_one(&self) {
         self.flush_notify.notify_one();
@@ -76,15 +86,8 @@ impl Storage {
         snapshot.commit(tx_id).await
     }
 
-    /// Set key-value pair
-    pub async fn set(&self, key: Key, value: Value) -> DbResult<()> {
-        let is_full = {
-            let guard = self.state.read().await;
-            guard.wal.append_kv(&key, &value).await?;
-            guard.mem_table.put(key, value);
-            guard.mem_table.is_full()
-        };
-        if is_full {
+    pub async fn check_freeze(&self) -> DbResult<()> {
+        if self.state.read().await.mem_table.is_full() {
             self.try_freeze().await?;
             self.await_flush_capacity().await;
         }

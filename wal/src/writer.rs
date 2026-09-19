@@ -9,7 +9,7 @@ use tokio::{
     sync::{Mutex, MutexGuard},
 };
 
-use crate::{OP_CMD, TX_BEGIN_CMD, TX_COMMIT_CMD, WalCmd, wal_id};
+use crate::{BATCH_CMD, OP_CMD, TX_BEGIN_CMD, TX_COMMIT_CMD, WalCmd, wal_id};
 
 /// Main structure for writing write-ahead log to disk.
 ///
@@ -63,7 +63,14 @@ impl WalWriter {
             WalCmd::TxBegin(tx_id) => append_tx_begin(&mut writer, tx_id).await?,
             WalCmd::TxCommit(tx_id) => append_tx_commit(&mut writer, tx_id).await?,
             WalCmd::Op(key, value) => append_op(&mut writer, &key, &value).await?,
+            WalCmd::Batch(batch) => append_batch(&mut writer, &batch).await?,
         }
+        flush(&mut writer).await
+    }
+
+    pub async fn append_batch(&self, batch: &[(Key, Value)]) -> DbResult<()> {
+        let mut writer = self.file.lock().await;
+        append_batch(&mut writer, batch).await?;
         flush(&mut writer).await
     }
 
@@ -106,6 +113,7 @@ async fn append_op(
     value: &Value,
 ) -> DbResult<()> {
     writer.write_u8(OP_CMD).await?;
+
     let len: u16 = key.0.len().try_into()?;
     writer.write_u16(len).await?;
     writer.write_all(key.0.as_bytes()).await?;
@@ -118,6 +126,19 @@ async fn append_op(
             writer.write_all(value.as_bytes()).await?;
         }
         Value::Delete => writer.write_u16(0).await?,
+    }
+
+    Ok(())
+}
+
+async fn append_batch(
+    writer: &mut MutexGuard<'_, BufWriter<File>>,
+    batch: &[(Key, Value)],
+) -> DbResult<()> {
+    writer.write_u8(BATCH_CMD).await?;
+
+    for (k, v) in batch {
+        append_op(writer, k, v).await?;
     }
 
     Ok(())

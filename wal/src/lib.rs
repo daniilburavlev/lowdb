@@ -8,6 +8,7 @@ mod writer;
 pub(crate) const TX_BEGIN_CMD: u8 = 1;
 pub(crate) const TX_COMMIT_CMD: u8 = 2;
 pub(crate) const OP_CMD: u8 = 3;
+pub(crate) const BATCH_CMD: u8 = 3;
 
 pub use reader::WalReader;
 pub use writer::WalWriter;
@@ -18,6 +19,7 @@ pub enum WalCmd {
     TxBegin(u64),
     TxCommit(u64),
     Op(Key, Value),
+    Batch(Vec<(Key, Value)>),
 }
 
 pub(crate) fn wal_id<P: AsRef<Path>>(path: P) -> DbResult<String> {
