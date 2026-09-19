@@ -15,20 +15,29 @@ use tokio::sync::Mutex;
 
 /// Shared by the `DB` and every transactions.
 pub struct Oracle {
+    // Globaly used sequence number
     next_seq: AtomicU64,
+    // Current commited, visible sequence
     visible: AtomicU64,
+    // Global incremental tx_id
+    tx_id: AtomicU64,
     commit_lock: Mutex<HashMap<String, u64>>,
     active: SyncMutex<BTreeMap<u64, u64>>,
 }
 
 impl Oracle {
-    pub fn new(max_seq: u64) -> Self {
+    pub fn new(max_seq: u64, tx_id: u64) -> Self {
         Self {
+            tx_id: AtomicU64::new(tx_id),
             next_seq: AtomicU64::new(max_seq + 1),
             visible: AtomicU64::new(max_seq),
             commit_lock: Mutex::new(HashMap::new()),
             active: SyncMutex::new(BTreeMap::new()),
         }
+    }
+
+    pub fn next_tx_id(&self) -> u64 {
+        self.tx_id.fetch_add(1, Relaxed)
     }
 
     pub fn read_ts(&self) -> u64 {

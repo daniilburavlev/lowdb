@@ -75,6 +75,7 @@ mod tests {
     use std::time::Duration;
 
     use common::error::DbError;
+    use storage::testing::create_storage;
 
     use super::*;
 
@@ -82,7 +83,7 @@ mod tests {
     async fn tx_visibility() {
         let (_dir, storage) = storage::testing::create_storage().await;
         let max_seq = 0;
-        let oracle = Arc::new(Oracle::new(max_seq));
+        let oracle = Arc::new(Oracle::new(max_seq, max_seq));
         let storage = Arc::new(storage);
 
         oracle
@@ -114,7 +115,7 @@ mod tests {
         let storage = Arc::new(storage);
 
         let storage = Arc::clone(&storage);
-        let oracle = Arc::new(Oracle::new(1));
+        let oracle = Arc::new(Oracle::new(1, 1));
 
         let mut tx = Transaction::new(oracle.clone(), storage.clone()).await;
 
@@ -137,7 +138,7 @@ mod tests {
     async fn conflict_does_not_depend_on_tx_creation_order() {
         let (_dir, storage) = storage::testing::create_storage().await;
 
-        let oracle = Arc::new(Oracle::new(1));
+        let oracle = Arc::new(Oracle::new(1, 1));
         let storage = Arc::new(storage);
 
         let dropped = Transaction::new(oracle.clone(), storage.clone()).await;
@@ -151,15 +152,11 @@ mod tests {
         assert!(matches!(t2.commit().await, Err(DbError::CommitConflict)));
     }
 
-    /// Bug: the snapshot seq is simply the next counter value, not a
-    /// "committed up to" watermark. A plain writer that allocated a lower seq
-    /// before the tx began but applies it after is visible mid-transaction.
-    /// (Simulates the interleaving `fetch_add` → tx begin → `Storage::set`.)
     #[tokio::test]
     async fn in_flight_lower_seq_write_is_not_visible_to_later_snapshot() {
         let (_dir, storage) = storage::testing::create_storage().await;
 
-        let oracle = Arc::new(Oracle::new(1));
+        let oracle = Arc::new(Oracle::new(1, 1));
         let storage = Arc::new(storage);
 
         let tx = Transaction::new(oracle.clone(), storage.clone()).await;
@@ -185,11 +182,23 @@ mod tests {
     async fn committed_tx_cannot_commit_again() {
         let (_dir, storage) = storage::testing::create_storage().await;
 
-        let oracle = Arc::new(Oracle::new(1));
+        let oracle = Arc::new(Oracle::new(1, 1));
         let storage = Arc::new(storage);
 
         let mut tx = Transaction::new(oracle, storage).await;
         tx.set("k", "v");
         tx.commit().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn check_two_txs_ids_created_one_time() {
+        let (_dir, storage) = create_storage().await;
+        let oracle = Arc::new(Oracle::new(1, 1));
+        let storage = Arc::new(storage);
+
+        let tx1 = Transaction::new(oracle.clone(), storage.clone()).await;
+        let tx2 = Transaction::new(oracle, storage).await;
+
+        assert_eq!(tx1.read_ts, tx2.read_ts);
     }
 }

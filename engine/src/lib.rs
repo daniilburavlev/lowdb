@@ -29,7 +29,7 @@ impl DB {
         Ok(Self {
             inner,
             flusher: Arc::new(Mutex::new(Some(flusher))),
-            oracle: Arc::new(Oracle::new(max_seq + 1)),
+            oracle: Arc::new(Oracle::new(max_seq + 1, restored.max_tx_id + 1)),
         })
     }
 

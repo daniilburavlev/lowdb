@@ -17,6 +17,8 @@ pub struct Restored {
     pub tables: Vec<MemTable>,
     /// Latest sequence found in WAL
     pub max_seq: u64,
+    /// Latest commited transaction's id
+    pub max_tx_id: u64,
 }
 
 /// Main WAL manager
@@ -98,6 +100,7 @@ async fn load_wals<P: AsRef<Path>>(dir: P) -> DbResult<Vec<WalReader>> {
 async fn restore_tables(mut wals: Vec<WalReader>) -> DbResult<Restored> {
     let mut tables = vec![];
     let mut max_seq = 0;
+    let mut max_tx_id = 0;
 
     for wal in wals.iter_mut() {
         let table = MemTable::new(wal.id().parse::<u64>()?);
@@ -107,7 +110,11 @@ async fn restore_tables(mut wals: Vec<WalReader>) -> DbResult<Restored> {
         }
         tables.push(table);
     }
-    Ok(Restored { tables, max_seq })
+    Ok(Restored {
+        tables,
+        max_seq,
+        max_tx_id,
+    })
 }
 
 #[cfg(test)]
