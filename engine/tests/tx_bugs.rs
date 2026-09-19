@@ -186,9 +186,12 @@ async fn commit_is_atomic_for_concurrent_readers() {
         let (db, done, partial) = (db.clone(), done.clone(), partial.clone());
         async move {
             while !done.load(SeqCst) {
+                // Separate `db.get` calls each read at the latest watermark, so a
+                // commit landing mid-scan is expected; read through one snapshot.
+                let snap = db.transaction().await;
                 let mut seen = 0;
                 for i in 0..KEYS {
-                    if db.get(&format!("k{i:03}")).await.unwrap().is_some() {
+                    if snap.get(&format!("k{i:03}")).await.unwrap().is_some() {
                         seen += 1;
                     }
                 }

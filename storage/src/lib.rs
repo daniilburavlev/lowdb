@@ -89,12 +89,30 @@ impl Storage {
         snapshot.commit(tx_id).await
     }
 
-    /// Check current mem_table is full and replace with new one
-    pub async fn maybe_freeze(&self) -> DbResult<()> {
+    /// Freeze the active memtable if it is full.
+    ///
+    /// Callers must make sure no write is between its memtable insert and its
+    /// publish, or a flush could drop the older, still-visible version.
+    pub async fn freeze_if_full(&self) -> DbResult<()> {
         if self.state.read().await.mem_table.is_full() {
             self.try_freeze().await?;
-            self.await_flush_capacity().await;
         }
+        Ok(())
+    }
+
+    /// Freeze the active memtable if it holds anything. Same caller
+    /// requirement as [`Storage::freeze_if_full`].
+    pub async fn freeze_active(&self) -> DbResult<()> {
+        let guard = self.state_lock.lock().await;
+        if !self.state.read().await.mem_table.is_empty() {
+            self.force_freeze(&guard).await?;
+        }
+        Ok(())
+    }
+
+    /// Flush every frozen memtable to level 0.
+    pub async fn flush_frozen(&self) -> DbResult<()> {
+        while self.flush_oldest().await? {}
         Ok(())
     }
 
@@ -114,16 +132,11 @@ impl Storage {
         snapshot.get_snap(key, seq).await
     }
 
-    /// Flush all frozen tables to disk
+    /// Freeze the active memtable and flush everything to disk. Only safe
+    /// when no commit is in flight; see [`Storage::freeze_if_full`].
     pub async fn flush_all(&self) -> DbResult<()> {
-        {
-            let guard = self.state_lock.lock().await;
-            if !self.state.read().await.mem_table.is_empty() {
-                self.force_freeze(&guard).await?;
-            }
-        }
-        while self.flush_oldest().await? {}
-        Ok(())
+        self.freeze_active().await?;
+        self.flush_frozen().await
     }
 
     async fn flush_oldest(&self) -> DbResult<bool> {
@@ -154,7 +167,8 @@ impl Storage {
         *guard = Arc::new(snapshot);
     }
 
-    async fn await_flush_capacity(&self) {
+    /// Wait until the number of frozen memtables is back under the limit.
+    pub async fn await_flush_capacity(&self) {
         loop {
             if self.state.read().await.frozen.len() <= MAX_FROZEN {
                 return;

@@ -6,6 +6,9 @@ use storage::{Storage, state::State};
 use crate::oracle::Oracle;
 
 pub mod oracle;
+mod snapshot;
+
+pub use snapshot::Snapshot;
 
 pub struct Transaction {
     tx_id: u64,

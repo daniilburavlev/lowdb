@@ -6,7 +6,7 @@ use std::{collections::BTreeMap, path::Path, sync::Arc};
 use common::{DbResult, value::Value};
 use storage::{Storage, flush_loop, storage::DiskStorage, wal::Wal};
 use tokio::{sync::Mutex, task::JoinHandle};
-use transaction::{Transaction, oracle::Oracle};
+use transaction::{Snapshot, Transaction, oracle::Oracle};
 
 /// DB instance type with the concurrent access to creation/deletion
 #[derive(Clone)]
@@ -40,6 +40,11 @@ impl DB {
         Transaction::new(oracle, storage).await
     }
 
+    /// Take a read-only snapshot; every read through it sees the same state
+    pub async fn snapshot(&self) -> Snapshot {
+        Snapshot::new(Arc::clone(&self.oracle), &self.inner).await
+    }
+
     /// Insert/update new key-value pair
     pub async fn set(&self, key: &str, value: &str) -> DbResult<()> {
         let value = BTreeMap::from([(key.to_string(), Value::set(value))]);
@@ -48,19 +53,23 @@ impl DB {
         Ok(())
     }
 
-    /// Get latest value by key
+    /// Get latest committed value by key
     pub async fn get(&self, key: &str) -> DbResult<Option<String>> {
-        self.inner.get(key).await
+        // Read at the published watermark, not `u64::MAX`: a commit inserts
+        // into the memtable before it becomes visible, so an unbounded read
+        // could observe a half-applied write set.
+        self.inner.get_snap(key, self.oracle.read_ts()).await
     }
 
     /// Flush memory values stored in memory to disk
     pub async fn flush(&self) -> DbResult<()> {
-        self.inner.flush_all().await
+        self.oracle.freeze(&self.inner).await?;
+        self.inner.flush_frozen().await
     }
 
     /// Close current instance of database
     pub async fn close(&self) -> DbResult<()> {
-        let result = self.inner.flush_all().await;
+        let result = self.flush().await;
         self.inner.begin_shutdown();
         if let Some(handle) = self.flusher.lock().await.take() {
             let _ = handle.await;
@@ -175,6 +184,25 @@ mod tests {
         assert_eq!(db.get("k").await.unwrap(), Some("value".to_string()));
         drain(&db.inner).await;
         assert_eq!(db.get("k").await.unwrap(), Some("value".to_string()));
+    }
+
+    #[tokio::test]
+    async fn snapshot_keeps_seeing_old_versions_across_writes_and_flush() {
+        let dir = tempdir().unwrap();
+        let db = DB::open(dir.path()).await.unwrap();
+
+        db.set("k", "old").await.unwrap();
+        let snap = db.snapshot().await;
+
+        db.set("k", "new").await.unwrap();
+        db.set("added", "x").await.unwrap();
+        // The flush keeps only `k@new`; the snapshot must still see `k@old`.
+        db.flush().await.unwrap();
+
+        assert_eq!(snap.get("k").await.unwrap(), Some("old".to_string()));
+        assert_eq!(snap.get("added").await.unwrap(), None);
+        assert_eq!(db.get("k").await.unwrap(), Some("new".to_string()));
+        db.close().await.unwrap();
     }
 
     #[tokio::test]

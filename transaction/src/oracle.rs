@@ -101,9 +101,18 @@ impl Oracle {
         };
         recent.retain(|_, ts| *ts > watermark);
 
+        // Freeze under the commit lock so a frozen memtable never holds an
+        // unpublished write; the backpressure wait happens outside it.
+        storage.freeze_if_full().await?;
         drop(recent);
-        // Freeze / backpressure wait goes here, outside the commit lock.
-        storage.maybe_freeze().await?;
+        storage.await_flush_capacity().await;
         Ok(commit_ts)
+    }
+
+    /// Freeze the active memtable while no commit is in flight, so a flush
+    /// cannot drop a visible version in favour of an unpublished one.
+    pub async fn freeze(&self, storage: &Storage) -> DbResult<()> {
+        let _recent = self.commit_lock.lock().await;
+        storage.freeze_active().await
     }
 }
