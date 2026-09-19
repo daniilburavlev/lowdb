@@ -10,7 +10,7 @@ use tokio::{
     io::{AsyncReadExt, BufReader},
 };
 
-use crate::{OP_CMD, TX_BEGIN_CMD, TX_COMMIT_CMD, WalCmd, wal_id};
+use crate::{BATCH_CMD, OP_CMD, TX_BEGIN_CMD, TX_COMMIT_CMD, WalCmd, wal_id};
 
 /// Main WAL reader structure, used for reading key-value pairs from existing file
 ///
@@ -66,6 +66,15 @@ impl WalReader {
             OP_CMD => {
                 let (key, value) = self.read_key_value().await?;
                 Ok(Some(WalCmd::Op(key, value)))
+            }
+            BATCH_CMD => {
+                let len = self.reader.read_u16().await?;
+                let mut batch = Vec::with_capacity(len as usize);
+                for _ in 0..len {
+                    let (key, value) = self.read_key_value().await?;
+                    batch.push((key, value));
+                }
+                Ok(Some(WalCmd::Batch(batch)))
             }
             e => Err(DbError::InvalidState(format!(
                 "unexpected WAL command: {}",

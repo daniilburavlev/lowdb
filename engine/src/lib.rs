@@ -1,26 +1,19 @@
 #![deny(unreachable_pub)]
 #![warn(missing_docs)]
 //! Simple LSM key-value storage engine
-use std::{
-    path::Path,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering::Relaxed},
-    },
-};
+use std::{collections::BTreeMap, path::Path, sync::Arc};
 
-use common::{DbResult, key::Key, value::Value};
+use common::{DbResult, value::Value};
 use storage::{Storage, flush_loop, storage::DiskStorage, wal::Wal};
 use tokio::{sync::Mutex, task::JoinHandle};
-use transaction::{Transaction, locks::Lock};
+use transaction::{Transaction, oracle::Oracle};
 
 /// DB instance type with the concurrent access to creation/deletion
 #[derive(Clone)]
 pub struct DB {
-    seq: Arc<AtomicU64>,
     inner: Arc<Storage>,
     flusher: Arc<Mutex<Option<JoinHandle<()>>>>,
-    lock: Lock,
+    oracle: Arc<Oracle>,
 }
 
 impl DB {
@@ -34,27 +27,24 @@ impl DB {
         let flusher = tokio::spawn(flush_loop(Arc::downgrade(&inner)));
         inner.flush_notify_one();
         Ok(Self {
-            seq: Arc::new(AtomicU64::new(max_seq + 1)),
             inner,
             flusher: Arc::new(Mutex::new(Some(flusher))),
-            lock: Lock::default(),
+            oracle: Arc::new(Oracle::new(max_seq + 1)),
         })
     }
 
     /// Create new transaction
     pub async fn transaction(&self) -> Transaction {
-        let seq = Arc::clone(&self.seq);
+        let oracle = Arc::clone(&self.oracle);
         let storage = Arc::clone(&self.inner);
-        let lock = self.lock.clone();
-        Transaction::new(seq, storage, lock).await
+        Transaction::new(oracle, storage).await
     }
 
     /// Insert/update new key-value pair
     pub async fn set(&self, key: &str, value: &str) -> DbResult<()> {
-        let seq = self.seq.fetch_add(1, Relaxed);
-        let key = Key::new(key, seq);
-        let value = Value::set(value);
-        self.inner.set(key, value).await
+        let value = BTreeMap::from([(key.to_string(), Value::set(value))]);
+        self.oracle.commit(&self.inner, None, value).await?;
+        Ok(())
     }
 
     /// Get latest value by key
@@ -88,10 +78,11 @@ impl Drop for DB {
 mod tests {
     use std::sync::atomic::{
         AtomicBool,
-        Ordering::{Acquire, Relaxed, Release},
+        Ordering::{Acquire, Release},
     };
 
     use ::wal::WalWriter;
+    use common::key::Key;
     use sstable::meta::SSTableMeta;
     use storage::testing::{drain, names};
     use tempfile::tempdir;
@@ -155,11 +146,6 @@ mod tests {
         db.close().await.unwrap();
 
         let db = DB::open(dir.path()).await.unwrap();
-        assert_eq!(
-            db.seq.load(Relaxed),
-            2,
-            "next sequence must clear the largest one on disk"
-        );
 
         db.set("k", "second").await.unwrap();
         db.close().await.unwrap();

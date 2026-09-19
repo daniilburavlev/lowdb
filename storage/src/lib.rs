@@ -12,7 +12,6 @@ use std::{
     time::Duration,
 };
 
-use ::wal::WalCmd;
 use common::{DbResult, key::Key, value::Value};
 use memtable::MemTable;
 use tokio::sync::{Mutex, MutexGuard, Notify, RwLock};
@@ -60,7 +59,8 @@ impl Storage {
         })
     }
 
-    pub async fn apply_batch(&self, batch: Vec<(Key, Value)>) -> DbResult<()> {
+    /// Set multiply values at one time
+    pub async fn set_batch(&self, batch: Vec<(Key, Value)>) -> DbResult<()> {
         let guard = self.state.read().await;
         guard.wal.append_batch(&batch).await?;
         for (k, v) in batch {
@@ -86,7 +86,8 @@ impl Storage {
         snapshot.commit(tx_id).await
     }
 
-    pub async fn check_freeze(&self) -> DbResult<()> {
+    /// Check current mem_table is full and replace with new one
+    pub async fn maybe_freeze(&self) -> DbResult<()> {
         if self.state.read().await.mem_table.is_full() {
             self.try_freeze().await?;
             self.await_flush_capacity().await;
@@ -251,7 +252,7 @@ mod tests {
         for i in 0..3 {
             let key = Key(format!("k{i}"), i);
             let value = Value::Set(format!("v{i}"));
-            storage.set(key, value).await.unwrap();
+            storage.set_batch(vec![(key, value)]).await.unwrap();
             let guard = storage.state_lock.lock().await;
             storage.force_freeze(&guard).await.unwrap();
         }

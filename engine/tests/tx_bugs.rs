@@ -24,13 +24,13 @@ async fn sequential_transactions_on_same_key_do_not_conflict() {
     let dir = tempdir().unwrap();
     let db = DB::open(dir.path()).await.unwrap();
 
-    let t1 = db.transaction().await;
-    t1.set("k", "v1").await.unwrap();
+    let mut t1 = db.transaction().await;
+    t1.set("k", "v1");
     t1.commit().await.unwrap();
 
     // t2 begins strictly after t1 committed: there is nothing to conflict with.
-    let t2 = db.transaction().await;
-    t2.set("k", "v2").await.unwrap();
+    let mut t2 = db.transaction().await;
+    t2.set("k", "v2");
     t2.commit()
         .await
         .expect("t2 started after t1 committed and must not conflict");
@@ -46,20 +46,20 @@ async fn pruning_recent_on_oldest_commit_does_not_hide_conflicts() {
     let dir = tempdir().unwrap();
     let db = DB::open(dir.path()).await.unwrap();
 
-    let t1 = db.transaction().await;
-    let t2 = db.transaction().await;
-    let t3 = db.transaction().await;
+    let mut t1 = db.transaction().await;
+    let mut t2 = db.transaction().await;
+    let mut t3 = db.transaction().await;
 
     // t2 commits "k" while t3 is running.
-    t2.set("k", "from t2").await.unwrap();
+    t2.set("k", "from t2");
     t2.commit().await.unwrap();
 
     // t1 is the oldest; its commit prunes t2's entry for "k".
-    t1.set("other", "x").await.unwrap();
+    t1.set("other", "x");
     t1.commit().await.unwrap();
 
     // t3 began before t2 committed "k": first-committer-wins requires abort.
-    t3.set("k", "from t3").await.unwrap();
+    t3.set("k", "from t3");
     assert!(
         matches!(t3.commit().await, Err(DbError::CommitConflict)),
         "t3 overwrote a key committed after it began (lost update)"
@@ -75,8 +75,8 @@ async fn snapshot_does_not_see_writes_committed_after_it_began() {
     let dir = tempdir().unwrap();
     let db = DB::open(dir.path()).await.unwrap();
 
-    let writer = db.transaction().await;
-    writer.set("k", "v").await.unwrap(); // seq allocated here, below reader's id
+    let mut writer = db.transaction().await;
+    writer.set("k", "v");
 
     let reader = db.transaction().await;
     assert_eq!(reader.get("k").await.unwrap(), None);
@@ -98,8 +98,8 @@ async fn plain_write_to_a_tx_key_is_detected_as_conflict() {
     let dir = tempdir().unwrap();
     let db = DB::open(dir.path()).await.unwrap();
 
-    let tx = db.transaction().await;
-    tx.set("k", "tx").await.unwrap();
+    let mut tx = db.transaction().await;
+    tx.set("k", "tx");
     db.set("k", "plain").await.unwrap();
 
     assert!(
@@ -116,8 +116,8 @@ async fn successful_commit_is_visible() {
     let dir = tempdir().unwrap();
     let db = DB::open(dir.path()).await.unwrap();
 
-    let tx = db.transaction().await;
-    tx.set("k", "tx").await.unwrap();
+    let mut tx = db.transaction().await;
+    tx.set("k", "tx");
     db.set("k", "plain").await.unwrap();
 
     match tx.commit().await {
@@ -142,8 +142,8 @@ async fn committed_tx_and_later_writes_survive_crash_recovery() {
         let db = DB::open(dir.path()).await.unwrap();
         db.set("before", "1").await.unwrap();
 
-        let tx = db.transaction().await;
-        tx.set("in_tx", "2").await.unwrap();
+        let mut tx = db.transaction().await;
+        tx.set("in_tx", "2");
         tx.commit().await.unwrap();
 
         db.set("after", "3").await.unwrap();
@@ -175,9 +175,9 @@ async fn commit_is_atomic_for_concurrent_readers() {
     let dir = tempdir().unwrap();
     let db = Arc::new(DB::open(dir.path()).await.unwrap());
 
-    let tx = db.transaction().await;
+    let mut tx = db.transaction().await;
     for i in 0..KEYS {
-        tx.set(&format!("k{i:03}"), "v").await.unwrap();
+        tx.set(&format!("k{i:03}"), "v");
     }
 
     let done = Arc::new(AtomicBool::new(false));

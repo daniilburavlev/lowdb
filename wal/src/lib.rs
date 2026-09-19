@@ -8,7 +8,7 @@ mod writer;
 pub(crate) const TX_BEGIN_CMD: u8 = 1;
 pub(crate) const TX_COMMIT_CMD: u8 = 2;
 pub(crate) const OP_CMD: u8 = 3;
-pub(crate) const BATCH_CMD: u8 = 3;
+pub(crate) const BATCH_CMD: u8 = 4;
 
 pub use reader::WalReader;
 pub use writer::WalWriter;
@@ -111,5 +111,58 @@ mod tests {
 
         let mut reader = WalReader::open(file.path()).await.unwrap();
         assert!(reader.next().await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn write_read_batch() {
+        let file = NamedTempFile::new().unwrap();
+
+        let writer = WalWriter::open(file.path()).await.unwrap();
+        let mut batch = vec![];
+        for i in 0..100 {
+            let key = Key(format!("k{i}"), i);
+            let value = Value::Set(format!("v{i}"));
+            batch.push((key, value));
+        }
+        writer.append_batch(&batch).await.unwrap();
+        let batch = WalCmd::Batch(batch);
+        writer.append(batch.clone()).await.unwrap();
+        drop(writer);
+
+        let mut reader = WalReader::open(file.path()).await.unwrap();
+        let restored = reader.next().await.unwrap().unwrap();
+        assert_eq!(batch, restored);
+        let restored = reader.next().await.unwrap().unwrap();
+        assert_eq!(batch, restored);
+        assert!(reader.next().await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn transactions_read_write() {
+        let file = NamedTempFile::new().unwrap();
+
+        let writer = WalWriter::open(file.path()).await.unwrap();
+        let begin = WalCmd::TxBegin(1);
+        let commit = WalCmd::TxCommit(1);
+
+        writer.append(begin.clone()).await.unwrap();
+        writer.append(commit.clone()).await.unwrap();
+        drop(writer);
+
+        let mut reader = WalReader::open(file.path()).await.unwrap();
+
+        assert_eq!(begin, reader.next().await.unwrap().unwrap());
+        assert_eq!(commit, reader.next().await.unwrap().unwrap());
+        assert!(reader.next().await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn append_key_value() {
+        let file = NamedTempFile::new().unwrap();
+
+        let writer = WalWriter::open(file.path()).await.unwrap();
+        let key = Key::new("k", 1);
+        let value = Value::set("v");
+        writer.append_kv(&key, &value).await.unwrap();
     }
 }

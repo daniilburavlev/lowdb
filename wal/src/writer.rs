@@ -113,7 +113,14 @@ async fn append_op(
     value: &Value,
 ) -> DbResult<()> {
     writer.write_u8(OP_CMD).await?;
+    append_key_value(writer, key, value).await
+}
 
+async fn append_key_value(
+    writer: &mut MutexGuard<'_, BufWriter<File>>,
+    key: &Key,
+    value: &Value,
+) -> DbResult<()> {
     let len: u16 = key.0.len().try_into()?;
     writer.write_u16(len).await?;
     writer.write_all(key.0.as_bytes()).await?;
@@ -127,7 +134,6 @@ async fn append_op(
         }
         Value::Delete => writer.write_u16(0).await?,
     }
-
     Ok(())
 }
 
@@ -135,12 +141,12 @@ async fn append_batch(
     writer: &mut MutexGuard<'_, BufWriter<File>>,
     batch: &[(Key, Value)],
 ) -> DbResult<()> {
+    let len: u16 = batch.len().try_into()?;
     writer.write_u8(BATCH_CMD).await?;
-
+    writer.write_u16(len).await?;
     for (k, v) in batch {
-        append_op(writer, k, v).await?;
+        append_key_value(writer, k, v).await?;
     }
-
     Ok(())
 }
 

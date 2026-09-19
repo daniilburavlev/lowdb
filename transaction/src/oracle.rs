@@ -52,7 +52,7 @@ impl Oracle {
         }
     }
 
-    /// `read_ts == Non` = plain write, no conflict check
+    /// If `read_ts == None` = plain write, no conflict check
     pub async fn commit(
         &self,
         storage: &Storage,
@@ -76,7 +76,7 @@ impl Oracle {
             .collect();
 
         // 3. One WAL record + memtable insert from the same State.
-        storage.apply_batch(batch).await?;
+        storage.set_batch(batch).await?;
 
         // 4. Record for conflict checks, the publish.
         for k in buffer.into_keys() {
