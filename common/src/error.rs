@@ -6,21 +6,47 @@ use std::{
 
 use thiserror::Error;
 
-/// A simple error type, used for IO/logic errors
+/// Errors returned by database engine
+///
+/// Variants fall into three groups:
+///
+/// - **Caller mistakes**: [`InvalidInt`](Self::InvalidInt),[`InvalidValue`](Self::InvalidValue).Fix the input; retrying won't help.
+/// - **Environment/storage problems**: [`IO`](Self::IO),[`InvalidState`](Self::InvalidState).
+/// - **Concurrency**: [`CommitConflict`](Self::CommitConflict). Safe to retry.
 #[derive(Debug, Error)]
 pub enum DbError {
-    /// Integer parsing error
-    #[error("{0}")]
+    /// A string could not be parsed as an integer.
+    ///
+    /// The payload is a human-readable description of the offending input.
+    #[error("invalid integer: {0}")]
     InvalidInt(String),
-    /// IO
-    #[error("IO :{0}")]
+
+    /// An underlying I/O operation falied (e.g. reading or writing the data file).
+    ///
+    /// The original [`std::io::Error`] is available via [`source()`](std::error::Error::source).
+    #[error("I/O error:{0}")]
     IO(#[from] std::io::Error),
-    /// Shows not valid input data
-    #[error("{0}")]
+
+    /// The input wal well-formed but rejected, e.g. a key that is empty or a value that exceeds the
+    /// size limit.
+    ///
+    /// The payload describes which value was rejected and why.
+    #[error("invalid value :{0}")]
     InvalidValue(String),
-    /// Shows part of system is in invalid state. i.e badly written file
-    #[error("{0}")]
+
+    /// Stored data or internal state is inconsistent, for example a truncated or corrupted file.
+    ///
+    /// This is usually indicates corrupted or a bag rather than a caller mistake, so relying is
+    /// unikely to help.
+    #[error("invalid state: {0}")]
     InvalidState(String),
+
+    /// The transaction could not be commited because another transaction modified the same data
+    /// first.
+    ///
+    /// Nothing was written. Is is safe to retry the whole transaction.
+    #[error("commit conflict")]
+    CommitConflict,
 }
 
 impl DbError {

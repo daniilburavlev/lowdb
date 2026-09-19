@@ -1,16 +1,13 @@
 [package]
-name = "engine"
+name = "transaction"
 edition = "2024"
 version.workspace = true
 
 [dependencies]
 common = { path = "../common" }
-sstable = { path = "../sstable" }
+memtable = { path = "../memtable" }
 storage = { path = "../storage" }
-transaction = { path = "../transaction" }
 tokio.workspace = true
-tracing.workspace = true
-wal = { path = "../wal" }
 
 [dev-dependencies]
 tempfile.workspace = true

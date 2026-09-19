@@ -20,7 +20,6 @@ pub async fn compact(
     let mut c = CompactionScan::new(m).await?;
     let mut w = SSTableWriter::create(out).await?;
     while let Some((k, v)) = c.next().await? {
-        println!("store: {:?} {:?}", k, v);
         w.add(&k, &v).await?;
     }
     w.finish().await
