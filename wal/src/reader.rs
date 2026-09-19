@@ -22,8 +22,8 @@ use crate::{BATCH_CMD, OP_CMD, TX_BEGIN_CMD, TX_COMMIT_CMD, WalCmd, wal_id};
 /// #[tokio::main]
 /// async fn main() {
 ///     let mut reader = WalReader::open(".example_read").await.unwrap();
-///     if let Some(WalCmd::Op(k, v)) = reader.next().await.unwrap() {
-///         println!("key: {:?} value: {:?}", k, v);
+///     if let Some(WalCmd::Op(tx_id, k, v)) = reader.next().await.unwrap() {
+///         println!("tx_id: {tx_id} key: {:?} value: {:?}", k, v);
 ///     }
 /// }
 /// ```
@@ -64,17 +64,19 @@ impl WalReader {
                 Ok(Some(WalCmd::TxCommit(tx_id)))
             }
             OP_CMD => {
+                let tx_id = self.reader.read_u64().await?;
                 let (key, value) = self.read_key_value().await?;
-                Ok(Some(WalCmd::Op(key, value)))
+                Ok(Some(WalCmd::Op(tx_id, key, value)))
             }
             BATCH_CMD => {
                 let len = self.reader.read_u16().await?;
+                let tx_id = self.reader.read_u64().await?;
                 let mut batch = Vec::with_capacity(len as usize);
                 for _ in 0..len {
                     let (key, value) = self.read_key_value().await?;
                     batch.push((key, value));
                 }
-                Ok(Some(WalCmd::Batch(batch)))
+                Ok(Some(WalCmd::Batch(tx_id, batch)))
             }
             e => Err(DbError::InvalidState(format!(
                 "unexpected WAL command: {}",

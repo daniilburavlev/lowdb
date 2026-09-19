@@ -22,7 +22,7 @@ use crate::{BATCH_CMD, OP_CMD, TX_BEGIN_CMD, TX_COMMIT_CMD, WalCmd, wal_id};
 /// #[tokio::main]
 /// async fn main() {
 ///     let mut writer = WalWriter::open(".example_write").await.unwrap();
-///     writer.append_kv(&Key::new("key", 1), &Value::Delete).await.unwrap();
+///     writer.append_kv(1, &Key::new("key", 1), &Value::Delete).await.unwrap();
 ///     writer.append(WalCmd::TxBegin(100)).await.unwrap();
 /// }
 /// ```
@@ -62,15 +62,15 @@ impl WalWriter {
         match op {
             WalCmd::TxBegin(tx_id) => append_tx_begin(&mut writer, tx_id).await?,
             WalCmd::TxCommit(tx_id) => append_tx_commit(&mut writer, tx_id).await?,
-            WalCmd::Op(key, value) => append_op(&mut writer, &key, &value).await?,
-            WalCmd::Batch(batch) => append_batch(&mut writer, &batch).await?,
+            WalCmd::Op(tx_id, key, value) => append_op(&mut writer, tx_id, &key, &value).await?,
+            WalCmd::Batch(tx_id, batch) => append_batch(&mut writer, tx_id, &batch).await?,
         }
         flush(&mut writer).await
     }
 
-    pub async fn append_batch(&self, batch: &[(Key, Value)]) -> DbResult<()> {
+    pub async fn append_batch(&self, tx_id: u64, batch: &[(Key, Value)]) -> DbResult<()> {
         let mut writer = self.file.lock().await;
-        append_batch(&mut writer, batch).await?;
+        append_batch(&mut writer, tx_id, batch).await?;
         flush(&mut writer).await
     }
 
@@ -80,9 +80,9 @@ impl WalWriter {
     /// [...[op u8, key_len u16, key_bytes, seq u64, value_len u16, value_bytes]...]
     ///
     /// After each `append_kv` call, file_sync called
-    pub async fn append_kv(&self, key: &Key, value: &Value) -> DbResult<()> {
+    pub async fn append_kv(&self, tx_id: u64, key: &Key, value: &Value) -> DbResult<()> {
         let mut writer = self.file.lock().await;
-        append_op(&mut writer, key, value).await?;
+        append_op(&mut writer, tx_id, key, value).await?;
         flush(&mut writer).await
     }
 
@@ -109,10 +109,12 @@ async fn append_tx_commit(
 
 async fn append_op(
     writer: &mut MutexGuard<'_, BufWriter<File>>,
+    tx_id: u64,
     key: &Key,
     value: &Value,
 ) -> DbResult<()> {
     writer.write_u8(OP_CMD).await?;
+    writer.write_u64(tx_id).await?;
     append_key_value(writer, key, value).await
 }
 
@@ -139,11 +141,13 @@ async fn append_key_value(
 
 async fn append_batch(
     writer: &mut MutexGuard<'_, BufWriter<File>>,
+    tx_id: u64,
     batch: &[(Key, Value)],
 ) -> DbResult<()> {
     let len: u16 = batch.len().try_into()?;
     writer.write_u8(BATCH_CMD).await?;
     writer.write_u16(len).await?;
+    writer.write_u64(tx_id).await?;
     for (k, v) in batch {
         append_key_value(writer, k, v).await?;
     }

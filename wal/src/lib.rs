@@ -18,8 +18,8 @@ pub use writer::WalWriter;
 pub enum WalCmd {
     TxBegin(u64),
     TxCommit(u64),
-    Op(Key, Value),
-    Batch(Vec<(Key, Value)>),
+    Op(u64, Key, Value),
+    Batch(u64, Vec<(Key, Value)>),
 }
 
 pub(crate) fn wal_id<P: AsRef<Path>>(path: P) -> DbResult<String> {
@@ -47,11 +47,11 @@ mod tests {
         let key = Key::new("key", 1);
         let value = Value::set("value");
         writer
-            .append(WalCmd::Op(key.clone(), value.clone()))
+            .append(WalCmd::Op(1, key.clone(), value.clone()))
             .await
             .unwrap();
         writer
-            .append(WalCmd::Op(key.clone(), Value::Delete))
+            .append(WalCmd::Op(1, key.clone(), Value::Delete))
             .await
             .unwrap();
 
@@ -61,10 +61,10 @@ mod tests {
         let mut reader = WalReader::open(file.path()).await.unwrap();
 
         let result = reader.next().await.unwrap().unwrap();
-        assert_eq!(WalCmd::Op(key.clone(), value), result);
+        assert_eq!(WalCmd::Op(1, key.clone(), value), result);
 
         let result = reader.next().await.unwrap().unwrap();
-        assert_eq!(WalCmd::Op(key, Value::Delete), result);
+        assert_eq!(WalCmd::Op(1, key, Value::Delete), result);
 
         assert_eq!(reader.id(), writer_id);
     }
@@ -77,7 +77,7 @@ mod tests {
         let key = Key::new("long_enough_key", 1);
         let value = Value::set("short");
         writer
-            .append(WalCmd::Op(key.clone(), value.clone()))
+            .append(WalCmd::Op(1, key.clone(), value.clone()))
             .await
             .unwrap();
         drop(writer);
@@ -85,7 +85,7 @@ mod tests {
         let mut reader = WalReader::open(file.path()).await.unwrap();
         let result = reader.next().await.unwrap().unwrap();
 
-        assert_eq!(WalCmd::Op(key, value), result);
+        assert_eq!(WalCmd::Op(1, key, value), result);
     }
 
     #[tokio::test]
@@ -98,7 +98,11 @@ mod tests {
 
         assert!(
             matches!(
-                writer.append(WalCmd::Op(key, value)).await.err().unwrap(),
+                writer
+                    .append(WalCmd::Op(1, key, value))
+                    .await
+                    .err()
+                    .unwrap(),
                 DbError::InvalidInt(_)
             ),
             "should validate u16 overflow"
@@ -124,8 +128,8 @@ mod tests {
             let value = Value::Set(format!("v{i}"));
             batch.push((key, value));
         }
-        writer.append_batch(&batch).await.unwrap();
-        let batch = WalCmd::Batch(batch);
+        writer.append_batch(1, &batch).await.unwrap();
+        let batch = WalCmd::Batch(1, batch);
         writer.append(batch.clone()).await.unwrap();
         drop(writer);
 
@@ -163,6 +167,6 @@ mod tests {
         let writer = WalWriter::open(file.path()).await.unwrap();
         let key = Key::new("k", 1);
         let value = Value::set("v");
-        writer.append_kv(&key, &value).await.unwrap();
+        writer.append_kv(1, &key, &value).await.unwrap();
     }
 }

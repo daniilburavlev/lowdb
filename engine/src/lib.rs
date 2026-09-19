@@ -43,7 +43,8 @@ impl DB {
     /// Insert/update new key-value pair
     pub async fn set(&self, key: &str, value: &str) -> DbResult<()> {
         let value = BTreeMap::from([(key.to_string(), Value::set(value))]);
-        self.oracle.commit(&self.inner, None, value).await?;
+        let tx_id = self.oracle.next_tx_id();
+        self.oracle.commit(tx_id, &self.inner, None, value).await?;
         Ok(())
     }
 
@@ -164,7 +165,7 @@ mod tests {
         let wal = WalWriter::open(dir.path().join("wal").join("1"))
             .await
             .unwrap();
-        wal.append_kv(&Key::new("k", 1), &Value::set("value"))
+        wal.append_kv(1, &Key::new("k", 1), &Value::set("value"))
             .await
             .unwrap();
         drop(wal);

@@ -8,6 +8,7 @@ use crate::oracle::Oracle;
 pub mod oracle;
 
 pub struct Transaction {
+    tx_id: u64,
     read_ts: u64,
     buffer: BTreeMap<String, Value>,
     oracle: Arc<Oracle>,
@@ -19,8 +20,10 @@ pub struct Transaction {
 impl Transaction {
     pub async fn new(oracle: Arc<Oracle>, storage: Arc<Storage>) -> Self {
         let read_ts = oracle.begin();
+        let tx_id = oracle.next_tx_id();
         let state = storage.snapshot().await;
         Self {
+            tx_id,
             read_ts,
             buffer: BTreeMap::new(),
             oracle,
@@ -53,7 +56,7 @@ impl Transaction {
             return Ok(());
         }
         self.oracle
-            .commit(&self.storage, Some(self.read_ts), buffer)
+            .commit(self.tx_id, &self.storage, Some(self.read_ts), buffer)
             .await
             .map(|_| ())
     }
@@ -82,12 +85,13 @@ mod tests {
     #[tokio::test]
     async fn tx_visibility() {
         let (_dir, storage) = storage::testing::create_storage().await;
-        let max_seq = 0;
+        let max_seq = 2;
         let oracle = Arc::new(Oracle::new(max_seq, max_seq));
         let storage = Arc::new(storage);
 
         oracle
             .commit(
+                1,
                 &storage,
                 None,
                 BTreeMap::from([("k1".to_string(), Value::set("v1"))]),
@@ -99,6 +103,7 @@ mod tests {
 
         oracle
             .commit(
+                1,
                 &storage,
                 None,
                 BTreeMap::from([("k1".to_string(), Value::set("v1"))]),
@@ -164,6 +169,7 @@ mod tests {
 
         oracle
             .commit(
+                1,
                 &storage,
                 None,
                 BTreeMap::from([("k".to_string(), Value::set("late"))]),

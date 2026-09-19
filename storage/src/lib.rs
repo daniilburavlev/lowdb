@@ -12,6 +12,7 @@ use std::{
     time::Duration,
 };
 
+use ::wal::WalCmd;
 use common::{DbResult, key::Key, value::Value};
 use memtable::MemTable;
 use tokio::sync::{Mutex, MutexGuard, Notify, RwLock};
@@ -60,12 +61,14 @@ impl Storage {
     }
 
     /// Set multiply values at one time
-    pub async fn set_batch(&self, batch: Vec<(Key, Value)>) -> DbResult<()> {
+    pub async fn set_batch(&self, tx_id: u64, batch: Vec<(Key, Value)>) -> DbResult<()> {
         let guard = self.state.read().await;
-        guard.wal.append_batch(&batch).await?;
+        guard.wal.append(WalCmd::TxBegin(tx_id)).await?;
+        guard.wal.append_batch(tx_id, &batch).await?;
         for (k, v) in batch {
             guard.mem_table.put(k, v);
         }
+        guard.wal.append(WalCmd::TxCommit(tx_id)).await?;
         Ok(())
     }
 
@@ -252,7 +255,7 @@ mod tests {
         for i in 0..3 {
             let key = Key(format!("k{i}"), i);
             let value = Value::Set(format!("v{i}"));
-            storage.set_batch(vec![(key, value)]).await.unwrap();
+            storage.set_batch(1, vec![(key, value)]).await.unwrap();
             let guard = storage.state_lock.lock().await;
             storage.force_freeze(&guard).await.unwrap();
         }

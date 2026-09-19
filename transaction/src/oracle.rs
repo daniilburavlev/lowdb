@@ -64,6 +64,7 @@ impl Oracle {
     /// If `read_ts == None` = plain write, no conflict check
     pub async fn commit(
         &self,
+        tx_id: u64,
         storage: &Storage,
         read_ts: Option<u64>,
         buffer: BTreeMap<String, Value>,
@@ -85,7 +86,7 @@ impl Oracle {
             .collect();
 
         // 3. One WAL record + memtable insert from the same State.
-        storage.set_batch(batch).await?;
+        storage.set_batch(tx_id, batch).await?;
 
         // 4. Record for conflict checks, the publish.
         for k in buffer.into_keys() {

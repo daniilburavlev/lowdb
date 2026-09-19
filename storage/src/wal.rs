@@ -1,10 +1,11 @@
 //! Wal wrapper, allowing to restore state after fall, generate new sequenced writer
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
     sync::atomic::AtomicU64,
 };
 
-use common::DbResult;
+use common::{DbResult, error::DbError};
 use memtable::MemTable;
 use tokio::fs;
 use wal::{WalCmd, WalReader, WalWriter};
@@ -104,9 +105,42 @@ async fn restore_tables(mut wals: Vec<WalReader>) -> DbResult<Restored> {
 
     for wal in wals.iter_mut() {
         let table = MemTable::new(wal.id().parse::<u64>()?);
-        while let Some(WalCmd::Op(key, value)) = wal.next().await? {
-            max_seq = max_seq.max(key.1);
-            table.put(key, value);
+        let mut txs = HashMap::<u64, MemTable>::new();
+        while let Some(cmd) = wal.next().await? {
+            match cmd {
+                WalCmd::TxBegin(tx_id) => {
+                    max_tx_id = max_tx_id.max(tx_id);
+                    if txs.insert(tx_id, MemTable::new(0)).is_some() {
+                        return Err(DbError::InvalidState(format!(
+                            "corrupted WAL; duplicate transaction id: '{tx_id}'"
+                        )));
+                    }
+                }
+                WalCmd::TxCommit(tx_id) => {
+                    let Some(values) = txs.remove(&tx_id) else {
+                        return Err(DbError::InvalidState(format!(
+                            "corrupted WAL; unknown transaction commit: '{tx_id}'"
+                        )));
+                    };
+                    for (k, v) in values.iter() {
+                        table.put(k.clone(), v.clone());
+                    }
+                }
+                WalCmd::Op(tx_id, key, value) => {
+                    if let Some(values) = txs.get_mut(&tx_id) {
+                        max_seq = max_seq.max(key.1);
+                        values.put(key, value);
+                    }
+                }
+                WalCmd::Batch(tx_id, batch) => {
+                    if let Some(values) = txs.get_mut(&tx_id) {
+                        for (key, value) in batch {
+                            max_seq = max_seq.max(key.1);
+                            values.put(key, value);
+                        }
+                    }
+                }
+            }
         }
         tables.push(table);
     }
@@ -129,14 +163,17 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().to_path_buf().join(WAL_DIR);
         fs::create_dir_all(&path).await.unwrap();
+
         for i in 0..10 {
             let path = path.join(format!("{}", i));
             let writer = WalWriter::open(&path).await.unwrap();
+            writer.append(WalCmd::TxBegin(1)).await.unwrap();
             for j in 0..100 {
                 let key = Key(format!("{}", i * j), i * j);
                 let value = Value::Set(format!("{}", i * j));
-                writer.append_kv(&key, &value).await.unwrap();
+                writer.append_kv(1, &key, &value).await.unwrap();
             }
+            writer.append(WalCmd::TxCommit(1)).await.unwrap();
         }
         let wal = Wal::new(&dir.path()).await.unwrap();
         let restored = wal.restore().await.unwrap();
@@ -155,11 +192,13 @@ mod tests {
 
         for id in 0..3u64 {
             let writer = WalWriter::open(path.join(format!("{}", id))).await.unwrap();
+            writer.append(WalCmd::TxBegin(1)).await.unwrap();
             let key = Key::new("k", id + 1);
             writer
-                .append_kv(&key, &Value::set(&format!("v{id}")))
+                .append_kv(1, &key, &Value::set(&format!("v{id}")))
                 .await
                 .unwrap();
+            writer.append(WalCmd::TxCommit(1)).await.unwrap();
         }
         fs::write(path.join("3.tmp"), b"junk").await.unwrap();
 
