@@ -9,23 +9,38 @@ use tokio::{sync::Mutex, task::JoinHandle};
 use transaction::{Snapshot, Transaction, oracle::Oracle};
 
 /// DB instance type with the concurrent access to creation/deletion
+///
+/// # Example
+/// ```rust
+/// #[tokio::test]
+/// async fn main() {
+/// }
+/// ```
 #[derive(Clone)]
 pub struct DB {
     inner: Arc<Storage>,
-    flusher: Arc<Mutex<Option<JoinHandle<()>>>>,
     oracle: Arc<Oracle>,
+    flusher: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
 
 impl DB {
     /// Open database with default options
+    ///
+    /// 1. Load WAL files from `${dir}/wal` directory, restore max_seq, max_tx_id, mem_tables
+    /// 2. Load sstables' metadata from `${dir}/ss` directory, restore max_seq
+    /// 3. Run background flusher loop
     pub async fn open<P: AsRef<Path>>(dir: P) -> DbResult<Self> {
         let wal = Wal::new(dir.as_ref()).await?;
-        let storage = DiskStorage::load(dir.as_ref()).await?;
         let restored = wal.restore().await?;
+
+        let storage = DiskStorage::load(dir.as_ref()).await?;
+
         let max_seq = storage.max_seq().max(restored.max_seq);
         let inner = Arc::new(Storage::new(wal, storage, restored.tables).await?);
+
         let flusher = tokio::spawn(flush_loop(Arc::downgrade(&inner)));
         inner.flush_notify_one();
+
         Ok(Self {
             inner,
             flusher: Arc::new(Mutex::new(Some(flusher))),

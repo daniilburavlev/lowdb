@@ -34,6 +34,7 @@ const RETRY_MAX: Duration = Duration::from_secs(5);
 /// Inner database storage, allowing make insertions/deletions, flush data to disk
 pub struct Storage {
     state: RwLock<Arc<State>>,
+    // Used in freeze locks
     state_lock: Mutex<()>,
     flush_lock: Mutex<()>,
     flush_notify: Notify,
@@ -220,13 +221,14 @@ impl Storage {
 }
 
 /// Run flush loop
+///
+/// 1. Flush oldest
 pub async fn flush_loop(inner: Weak<Storage>) {
     let mut retry = RETRY_MIN;
     loop {
         let Some(inner) = inner.upgrade() else {
             return;
         };
-
         match inner.flush_oldest().await {
             Ok(true) => {
                 retry = RETRY_MIN;

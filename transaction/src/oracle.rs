@@ -17,11 +17,12 @@ use tokio::sync::Mutex;
 pub struct Oracle {
     // Globaly used sequence number
     next_seq: AtomicU64,
-    // Current commited, visible sequence
+    // Current commited visible sequence
     visible: AtomicU64,
     // Global incremental tx_id
     tx_id: AtomicU64,
     commit_lock: Mutex<HashMap<String, u64>>,
+    // Counter by visibility sequence
     active: SyncMutex<BTreeMap<u64, u64>>,
 }
 
@@ -44,6 +45,7 @@ impl Oracle {
         self.visible.load(Acquire)
     }
 
+    /// Increment current visibility sequnce counter
     pub(crate) fn begin(&self) -> u64 {
         let mut active = self.active.lock().unwrap();
         let read_ts = self.visible.load(Acquire);
@@ -51,6 +53,7 @@ impl Oracle {
         read_ts
     }
 
+    /// Decrement transaction's visibility sequence
     pub(crate) fn end(&self, read_ts: u64) {
         let mut active = self.active.lock().unwrap();
         if let Some(n) = active.get_mut(&read_ts) {
