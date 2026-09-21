@@ -15,13 +15,15 @@ use crate::{BATCH_CMD, OP_CMD, TX_BEGIN_CMD, TX_COMMIT_CMD, WalCmd, wal_id};
 ///
 /// # Example
 /// ```rust
+/// use tempfile::NamedTempFile;
 /// use wal::WalWriter;
 /// use wal::WalCmd;
 /// use common::{key::Key, value::Value};
 ///
 /// #[tokio::main]
 /// async fn main() {
-///     let mut writer = WalWriter::open(".example_write").await.unwrap();
+///     let file = NamedTempFile::new().unwrap();
+///     let mut writer = WalWriter::open(file.path()).await.unwrap();
 ///     writer.append_kv(1, &Key::new("key", 1), &Value::Delete).await.unwrap();
 ///     writer.append(WalCmd::TxBegin(100)).await.unwrap();
 /// }

@@ -3,7 +3,7 @@
 //! Simple LSM key-value storage engine
 use std::{
     sync::{
-        Arc, Weak,
+        Arc,
         atomic::{
             AtomicBool,
             Ordering::{Acquire, Release},
@@ -28,8 +28,6 @@ use crate::{state::State, storage::DiskStorage, wal::Wal};
 
 const MAX_FROZEN: usize = 4;
 const BACKPRESSURE_POLL: Duration = Duration::from_millis(50);
-const RETRY_MIN: Duration = Duration::from_millis(50);
-const RETRY_MAX: Duration = Duration::from_secs(5);
 
 /// Inner database storage, allowing make insertions/deletions, flush data to disk
 pub struct Storage {
@@ -37,26 +35,35 @@ pub struct Storage {
     // Used in freeze locks
     state_lock: Mutex<()>,
     flush_lock: Mutex<()>,
-    flush_notify: Notify,
+    flush_notify: Arc<Notify>,
     flushed_notify: Notify,
+    merge_notify: Arc<Notify>,
     shutdown: AtomicBool,
-    shutdown_notify: Notify,
+    shutdown_notify: Arc<Notify>,
     wal: Wal,
 }
 
 impl Storage {
     /// Create new storage instance
-    pub async fn new(wal: Wal, storage: DiskStorage, tables: Vec<MemTable>) -> DbResult<Self> {
+    pub async fn new(
+        wal: Wal,
+        storage: DiskStorage,
+        tables: Vec<MemTable>,
+        flush_notify: Arc<Notify>,
+        merge_notify: Arc<Notify>,
+        shutdown_notify: Arc<Notify>,
+    ) -> DbResult<Self> {
         let writer = wal.new_writer().await?;
         let state = State::new(writer, tables, storage)?;
         Ok(Self {
             state: RwLock::new(Arc::new(state)),
             state_lock: Mutex::new(()),
             flush_lock: Mutex::new(()),
-            flush_notify: Notify::default(),
+            flush_notify,
             flushed_notify: Notify::default(),
+            merge_notify,
             shutdown: AtomicBool::new(false),
-            shutdown_notify: Notify::default(),
+            shutdown_notify,
             wal,
         })
     }
@@ -111,12 +118,6 @@ impl Storage {
         Ok(())
     }
 
-    /// Flush every frozen memtable to level 0.
-    pub async fn flush_frozen(&self) -> DbResult<()> {
-        while self.flush_oldest().await? {}
-        Ok(())
-    }
-
     /// Get current snapshot
     pub async fn snapshot(&self) -> Arc<State> {
         self.state.read().await.clone()
@@ -133,14 +134,7 @@ impl Storage {
         snapshot.get_snap(key, seq).await
     }
 
-    /// Freeze the active memtable and flush everything to disk. Only safe
-    /// when no commit is in flight; see [`Storage::freeze_if_full`].
-    pub async fn flush_all(&self) -> DbResult<()> {
-        self.freeze_active().await?;
-        self.flush_frozen().await
-    }
-
-    async fn flush_oldest(&self) -> DbResult<bool> {
+    pub async fn flush_oldest(&self, read_ts_watermark: u64) -> DbResult<bool> {
         let _guard = self.flush_lock.lock().await;
 
         let (mt, storage) = {
@@ -150,8 +144,7 @@ impl Storage {
             };
             (mt, state.storage.clone())
         };
-
-        storage.l0(&mt).await?;
+        storage.l0(&mt, read_ts_watermark).await?;
         self.retire(&mt).await;
         self.wal.remove(mt.id()).await?;
 
@@ -179,7 +172,7 @@ impl Storage {
         }
     }
 
-    fn is_shutdown(&self) -> bool {
+    pub fn is_shutdown(&self) -> bool {
         self.shutdown.load(Acquire)
     }
 
@@ -220,41 +213,6 @@ impl Storage {
     }
 }
 
-/// Run flush loop
-///
-/// 1. Flush oldest
-pub async fn flush_loop(inner: Weak<Storage>) {
-    let mut retry = RETRY_MIN;
-    loop {
-        let Some(inner) = inner.upgrade() else {
-            return;
-        };
-        match inner.flush_oldest().await {
-            Ok(true) => {
-                retry = RETRY_MIN;
-                continue;
-            }
-            Ok(false) => {}
-            Err(e) => {
-                tracing::error!("flush failed: {e}");
-                if inner.is_shutdown() {
-                    return;
-                }
-                tokio::time::sleep(retry).await;
-                retry = (retry * 2).min(RETRY_MAX);
-                continue;
-            }
-        }
-        if inner.is_shutdown() {
-            return;
-        }
-        tokio::select! {
-            _ = inner.flush_notify.notified() => {}
-            _ = inner.shutdown_notify.notified() => {}
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
 
@@ -266,7 +224,6 @@ mod tests {
     async fn background_flusher_drains_frozen_memtables() {
         let (dir, storage) = create_storage().await;
         let storage = Arc::new(storage);
-        tokio::spawn(flush_loop(Arc::downgrade(&storage)));
 
         for i in 0..3 {
             let key = Key(format!("k{i}"), i);
@@ -275,6 +232,9 @@ mod tests {
             let guard = storage.state_lock.lock().await;
             storage.force_freeze(&guard).await.unwrap();
         }
+        storage.flush_oldest(0).await.unwrap();
+        storage.flush_oldest(0).await.unwrap();
+        storage.flush_oldest(0).await.unwrap();
         drain(&storage).await;
 
         assert_eq!(names(&dir, "ss").await.len(), 3);

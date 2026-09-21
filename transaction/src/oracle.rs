@@ -45,6 +45,12 @@ impl Oracle {
         self.visible.load(Acquire)
     }
 
+    pub fn watermark(&self) -> u64 {
+        let active = self.active.lock().unwrap();
+        let commit_ts = self.visible.load(Relaxed);
+        active.first_key_value().map_or(commit_ts, |(&ts, _)| ts)
+    }
+
     /// Increment current visibility sequnce counter
     pub(crate) fn begin(&self) -> u64 {
         let mut active = self.active.lock().unwrap();

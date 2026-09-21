@@ -41,15 +41,15 @@ pub(crate) struct MergeScan {
 impl MergeScan {
     pub(crate) async fn new(scans: Vec<TableScan>) -> DbResult<Self> {
         let n = scans.len();
-        let mut me = Self {
+        let mut ms = Self {
             scans,
             pending: vec![None; n],
             heap: BinaryHeap::new(),
         };
         for i in 0..n {
-            me.advance(i).await?;
+            ms.advance(i).await?;
         }
-        Ok(me)
+        Ok(ms)
     }
 
     async fn advance(&mut self, i: usize) -> DbResult<()> {

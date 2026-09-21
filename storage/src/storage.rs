@@ -7,7 +7,7 @@ use std::{
     },
 };
 
-use common::{DbResult, lookup::Lookup};
+use common::{DbResult, key::Key, lookup::Lookup};
 use dashmap::DashMap;
 use memtable::MemTable;
 use sstable::{
@@ -85,27 +85,27 @@ impl DiskStorage {
     }
 
     /// Persist memtable to level 0 SSTable
-    pub async fn l0(&self, mt: &MemTable) -> DbResult<bool> {
+    pub async fn l0(&self, mt: &MemTable, read_ts_watermark: u64) -> DbResult<bool> {
         let _guard = self.lock.lock().await;
         let id = self.id.fetch_add(1, Relaxed);
         let path = self.dir.join(format!("0_{}", id));
 
-        let result = self.write_l0(&path, mt).await;
+        let result = self.write_l0(&path, mt, read_ts_watermark).await;
         if result.is_err() {
             let _ = fs::remove_file(tmp_path(&path)).await;
         }
         result
     }
 
-    async fn write_l0(&self, path: &Path, mt: &MemTable) -> DbResult<bool> {
+    async fn write_l0(&self, path: &Path, mt: &MemTable, read_ts_watermark: u64) -> DbResult<bool> {
         let mut writer = SSTableWriter::create(path).await?;
-        let mut previous = None::<&str>;
+        let mut previous = None::<&Key>;
         for (k, v) in mt.iter() {
-            if previous == Some(k.0.as_str()) {
+            if matches!(previous, Some(key) if key.0 == k.0 && key.1 <= read_ts_watermark) {
                 continue;
             }
             writer.add(k, v).await?;
-            previous = Some(k.0.as_str());
+            previous = Some(k);
         }
         let Some(meta) = writer.finish().await? else {
             return Ok(false);
@@ -165,7 +165,7 @@ mod tests {
         mt.put(Key::new("a", 2), Value::set("new"));
         mt.put(Key::new("b", 3), Value::Delete);
 
-        assert!(storage.l0(&mt).await.unwrap());
+        assert!(storage.l0(&mt, 3).await.unwrap());
 
         let path = dir.path().join(TABLES_DIR).join("0_1");
         let meta = sstable::meta::SSTableMeta::read(&path).await.unwrap();
@@ -189,7 +189,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let storage = DiskStorage::load(dir.path()).await.unwrap();
 
-        assert!(!storage.l0(&MemTable::new(0)).await.unwrap());
+        assert!(!storage.l0(&MemTable::new(0), 0).await.unwrap());
 
         let mut entries = fs::read_dir(dir.path().join(TABLES_DIR)).await.unwrap();
         assert!(

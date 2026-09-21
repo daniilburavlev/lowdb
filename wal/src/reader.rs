@@ -16,12 +16,14 @@ use crate::{BATCH_CMD, OP_CMD, TX_BEGIN_CMD, TX_COMMIT_CMD, WalCmd, wal_id};
 ///
 /// # Example
 /// ```rust
+/// use tempfile::NamedTempFile;
 /// use wal::WalReader;
 /// use wal::WalCmd;
 ///
 /// #[tokio::main]
 /// async fn main() {
-///     let mut reader = WalReader::open(".example_read").await.unwrap();
+///     let file = NamedTempFile::new().unwrap();
+///     let mut reader = WalReader::open(file.path()).await.unwrap();
 ///     if let Some(WalCmd::Op(tx_id, k, v)) = reader.next().await.unwrap() {
 ///         println!("tx_id: {tx_id} key: {:?} value: {:?}", k, v);
 ///     }
