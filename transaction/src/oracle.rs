@@ -114,7 +114,6 @@ impl Oracle {
         // unpublished write; the backpressure wait happens outside it.
         storage.freeze_if_full().await?;
         drop(recent);
-        storage.await_flush_capacity().await;
         Ok(commit_ts)
     }
 

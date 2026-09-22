@@ -37,6 +37,7 @@ pub struct DB {
     inner: Arc<Storage>,
     oracle: Arc<Oracle>,
     flusher: Arc<Mutex<Option<JoinHandle<()>>>>,
+    merger: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
 
 impl DB {
@@ -72,6 +73,12 @@ impl DB {
             Arc::downgrade(&inner),
             Arc::clone(&oracle),
             flush_notify,
+            Arc::clone(&shutdown_notify),
+        ));
+        let merger = tokio::spawn(merge_loop(
+            Arc::downgrade(&inner),
+            Arc::clone(&oracle),
+            merge_notify,
             shutdown_notify,
         ));
         inner.flush_notify_one();
@@ -79,6 +86,7 @@ impl DB {
         Ok(Self {
             inner,
             flusher: Arc::new(Mutex::new(Some(flusher))),
+            merger: Arc::new(Mutex::new(Some(merger))),
             oracle,
         })
     }
@@ -122,7 +130,16 @@ impl DB {
         if let Some(handle) = self.flusher.lock().await.take() {
             let _ = handle.await;
         }
+        if let Some(handle) = self.merger.lock().await.take() {
+            let _ = handle.await;
+        }
         result
+    }
+}
+
+impl Drop for DB {
+    fn drop(&mut self) {
+        self.inner.begin_shutdown();
     }
 }
 
@@ -164,9 +181,39 @@ async fn flush_loop(
     }
 }
 
-impl Drop for DB {
-    fn drop(&mut self) {
-        self.inner.begin_shutdown();
+async fn merge_loop(
+    storage: Weak<Storage>,
+    oracle: Arc<Oracle>,
+    merge_notify: Arc<Notify>,
+    shutdown_notify: Arc<Notify>,
+) {
+    let mut retry = RETRY_MIN;
+    loop {
+        let Some(storage) = storage.upgrade() else {
+            return;
+        };
+        let read_ts_watermark = oracle.watermark();
+        match storage.merge(read_ts_watermark).await {
+            Ok(()) => {
+                retry = RETRY_MIN;
+            }
+            Err(e) => {
+                tracing::error!("merge failed: {e}");
+                if storage.is_shutdown() {
+                    return;
+                }
+                tokio::time::sleep(retry).await;
+                retry = (retry * 2).min(RETRY_MAX);
+                continue;
+            }
+        }
+        if storage.is_shutdown() {
+            return;
+        }
+        tokio::select! {
+            _ = merge_notify.notified() => {}
+            _ = shutdown_notify.notified() => {}
+        }
     }
 }
 

@@ -11,6 +11,7 @@ use common::{DbResult, key::Key, lookup::Lookup};
 use dashmap::DashMap;
 use memtable::MemTable;
 use sstable::{
+    scan::compact,
     table::SSTable,
     writer::{SSTableWriter, tmp_path},
 };
@@ -19,17 +20,16 @@ use tokio::{
     sync::Mutex,
 };
 
-use crate::tables::SSTables;
-
 const TABLES_DIR: &str = "ss";
 const TMP_EXT: &str = "tmp";
+const MIN_TABLES: usize = 4;
 
 /// Structure for accessing files on disk
 pub struct DiskStorage {
     dir: PathBuf,
     id: AtomicU64,
     max_seq: u64,
-    tables: DashMap<u32, SSTables>,
+    tables: DashMap<u32, Vec<Arc<SSTable>>>,
     lock: Mutex<()>,
 }
 
@@ -66,7 +66,7 @@ impl DiskStorage {
             max_seq = max_seq.max(table.meta.largest_seq());
             tables
                 .entry(level)
-                .or_insert_with(SSTables::new)
+                .or_insert_with(Vec::new)
                 .push(Arc::new(table));
         }
 
@@ -111,10 +111,7 @@ impl DiskStorage {
             return Ok(false);
         };
         let table = SSTable::new(meta)?;
-        self.tables
-            .entry(0)
-            .or_insert_with(SSTables::new)
-            .insert(0, Arc::new(table));
+        self.tables.entry(0).or_default().insert(0, Arc::new(table));
         Ok(true)
     }
 
@@ -125,14 +122,12 @@ impl DiskStorage {
 
     /// Search value by key where given seq is greater or equal
     pub async fn get_snap(&self, key: &str, seq: u64) -> DbResult<Lookup> {
-        let mut levels: Vec<u32> = self.tables.iter().map(|e| *e.key()).collect();
-        levels.sort_unstable();
-
+        let levels = self.get_levels();
         for level in levels {
-            let Some(tables) = self.tables.get(&level).map(|e| e.value().clone()) else {
+            let Some(tables) = self.tables.get(&level).map(|e| e.clone()) else {
                 continue;
             };
-            for table in tables.search() {
+            for table in tables.iter() {
                 match table.get(key, seq).await? {
                     Lookup::Absent => {}
                     lookup => return Ok(lookup),
@@ -140,6 +135,40 @@ impl DiskStorage {
             }
         }
         Ok(Lookup::Absent)
+    }
+
+    /// Merge tables by level
+    pub async fn merge(&self, read_ts_watermark: u64) -> DbResult<()> {
+        let _lock = self.lock.lock().await;
+        let levels = self.get_levels();
+        let Some(last) = levels.last() else {
+            return Ok(());
+        };
+        let last = *last;
+        for level in levels {
+            let Some(tables) = self.tables.get(&level).map(|e| e.clone()) else {
+                continue;
+            };
+            if tables.len() < MIN_TABLES {
+                continue;
+            }
+            let mut scans = Vec::with_capacity(tables.len());
+            for table in tables {
+                scans.push(table.scan().await?);
+            }
+            let id = self.id.fetch_add(1, Relaxed);
+            let path = format!("{}_{}", level + 1, id);
+            let drop_tombstone = level == last;
+            compact(path, scans, drop_tombstone, read_ts_watermark).await?;
+            self.tables.remove(&level);
+        }
+        Ok(())
+    }
+
+    fn get_levels(&self) -> Vec<u32> {
+        let mut levels: Vec<u32> = self.tables.iter().map(|e| *e.key()).collect();
+        levels.sort_unstable();
+        levels
     }
 }
 

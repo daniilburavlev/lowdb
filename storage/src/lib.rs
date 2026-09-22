@@ -1,15 +1,12 @@
 #![deny(unreachable_pub)]
 #![warn(missing_docs)]
 //! Simple LSM key-value storage engine
-use std::{
-    sync::{
-        Arc,
-        atomic::{
-            AtomicBool,
-            Ordering::{Acquire, Release},
-        },
+use std::sync::{
+    Arc,
+    atomic::{
+        AtomicBool,
+        Ordering::{Acquire, Release},
     },
-    time::Duration,
 };
 
 use ::wal::WalCmd;
@@ -19,15 +16,11 @@ use tokio::sync::{Mutex, MutexGuard, Notify, RwLock};
 
 pub mod state;
 pub mod storage;
-mod tables;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 pub mod wal;
 
 use crate::{state::State, storage::DiskStorage, wal::Wal};
-
-const MAX_FROZEN: usize = 4;
-const BACKPRESSURE_POLL: Duration = Duration::from_millis(50);
 
 /// Inner database storage, allowing make insertions/deletions, flush data to disk
 pub struct Storage {
@@ -36,7 +29,6 @@ pub struct Storage {
     state_lock: Mutex<()>,
     flush_lock: Mutex<()>,
     flush_notify: Arc<Notify>,
-    flushed_notify: Notify,
     merge_notify: Arc<Notify>,
     shutdown: AtomicBool,
     shutdown_notify: Arc<Notify>,
@@ -60,7 +52,6 @@ impl Storage {
             state_lock: Mutex::new(()),
             flush_lock: Mutex::new(()),
             flush_notify,
-            flushed_notify: Notify::default(),
             merge_notify,
             shutdown: AtomicBool::new(false),
             shutdown_notify,
@@ -152,6 +143,12 @@ impl Storage {
         Ok(true)
     }
 
+    pub async fn merge(&self, read_ts_watermark: u64) -> DbResult<()> {
+        let storage = self.state.read().await.storage.clone();
+        storage.merge(read_ts_watermark).await?;
+        Ok(())
+    }
+
     async fn retire(&self, mt: &Arc<MemTable>) {
         let _guard = self.state_lock.lock().await;
         let mut guard = self.state.write().await;
@@ -161,17 +158,7 @@ impl Storage {
         *guard = Arc::new(snapshot);
     }
 
-    /// Wait until the number of frozen memtables is back under the limit.
-    pub async fn await_flush_capacity(&self) {
-        loop {
-            if self.state.read().await.frozen.len() <= MAX_FROZEN {
-                return;
-            }
-            self.flush_notify.notify_one();
-            let _ = tokio::time::timeout(BACKPRESSURE_POLL, self.flushed_notify.notified()).await;
-        }
-    }
-
+    /// Shutdown process marker
     pub fn is_shutdown(&self) -> bool {
         self.shutdown.load(Acquire)
     }

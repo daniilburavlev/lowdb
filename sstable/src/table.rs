@@ -6,6 +6,7 @@ use crate::{
     cursor::{Cursor, ValueRef},
     index::IndexedKey,
     meta::SSTableMeta,
+    scan::table::TableScan,
 };
 
 pub struct BlockHandle {
@@ -38,6 +39,10 @@ impl SSTable {
             file: Arc::new(file),
             meta,
         })
+    }
+
+    pub async fn scan(&self) -> DbResult<TableScan> {
+        TableScan::open(&self.meta.path).await
     }
 
     pub async fn get(&self, user: &str, snapshot: u64) -> DbResult<Lookup> {
